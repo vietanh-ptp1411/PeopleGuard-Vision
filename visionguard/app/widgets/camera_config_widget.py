@@ -12,8 +12,9 @@ from PySide6.QtWidgets import (QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog
 from ...camera.base_camera import DeviceDescriptor
 from ...camera.rtsp_camera import RTSP_PRESETS, build_rtsp_url, mask_url
 from ...camera.video_camera import VIDEO_EXTENSIONS
-from ...config.schemas import CameraConfig, CameraType
+from ...config.schemas import CameraBrand, CameraConfig, CameraType, DetectionMode, EventProviderType
 from ..theme import COLOR_ERROR, COLOR_OK, COLOR_TEXT_DIM
+from .ai_camera_widget import AiCameraWidget
 
 
 def _btn(text: str, cls: str = "") -> QPushButton:
@@ -33,6 +34,9 @@ class CameraConfigWidget(QWidget):
     rtsp_test_requested = Signal()
     video_command = Signal(str, object)     # pause/resume/toggle/restart/seek/loop
     config_applied = Signal(object)         # CameraConfig
+    detection_mode_changed = Signal(str)    # DetectionMode value
+    ai_test_camera_requested = Signal()
+    ai_test_event_requested = Signal()
 
     def __init__(self, config: CameraConfig, availability: Dict[CameraType, Tuple[bool, str]], parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -54,9 +58,29 @@ class CameraConfigWidget(QWidget):
         lay = QVBoxLayout(body)
         lay.setSpacing(8)
 
+        # detection mode + brand
+        g_mode = QGroupBox("DETECTION MODE")
+        lm = QFormLayout(g_mode)
+        self.cmb_mode = QComboBox()
+        for mode in DetectionMode:
+            self.cmb_mode.addItem(mode.label, mode.value)
+        self.cmb_mode.currentIndexChanged.connect(self._on_mode_changed)
+        lm.addRow("Detection source", self.cmb_mode)
+        self.cmb_brand = QComboBox()
+        for brand in CameraBrand:
+            self.cmb_brand.addItem(brand.label, brand.value)
+        self.cmb_brand.currentIndexChanged.connect(self._on_brand_changed)
+        lm.addRow("Camera brand", self.cmb_brand)
+        self.lbl_mode_hint = QLabel("")
+        self.lbl_mode_hint.setWordWrap(True)
+        self.lbl_mode_hint.setProperty("class", "hint")
+        lm.addRow(self.lbl_mode_hint)
+        lay.addWidget(g_mode)
+
         # type
-        g_type = QGroupBox("CAMERA TYPE")
+        g_type = QGroupBox("VIDEO SOURCE (PC AI / YOLO)")
         lt = QFormLayout(g_type)
+        self.g_type = g_type
         self.cmb_type = QComboBox()
         for ct in CameraType:
             ok, status = self._availability.get(ct, (True, "OK"))
@@ -76,10 +100,15 @@ class CameraConfigWidget(QWidget):
         self.page_video = self._build_video()
         self.page_rtsp = self._build_rtsp()
         self.page_ind = self._build_industrial()
+        self.page_ai = AiCameraWidget(self._config.ai_camera)
+        self.page_ai.test_camera_requested.connect(self._ai_test_camera)
+        self.page_ai.test_rtsp_requested.connect(lambda: (self._apply(), self.rtsp_test_requested.emit()))
+        self.page_ai.test_event_requested.connect(self._ai_test_event)
         self.stack.addWidget(self.page_usb)
         self.stack.addWidget(self.page_video)
         self.stack.addWidget(self.page_rtsp)
         self.stack.addWidget(self.page_ind)
+        self.stack.addWidget(self.page_ai)
         for i in range(self.stack.count()):
             self.stack.widget(i).setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Ignored)
         lay.addWidget(self.stack)
@@ -298,9 +327,45 @@ class CameraConfigWidget(QWidget):
         except ValueError:
             return CameraType.USB
 
+    def current_mode(self) -> DetectionMode:
+        try:
+            return DetectionMode(self.cmb_mode.currentData())
+        except ValueError:
+            return DetectionMode.AI_CAMERA
+
+    def current_brand(self) -> CameraBrand:
+        try:
+            return CameraBrand(self.cmb_brand.currentData())
+        except ValueError:
+            return CameraBrand.GENERIC
+
+    def _on_mode_changed(self) -> None:
+        ai = self.current_mode() == DetectionMode.AI_CAMERA
+        self.g_type.setVisible(not ai)
+        self.lbl_mode_hint.setText(
+            "The camera detects people itself and sends events; the PC shows the RTSP picture and "
+            "drives the PLC. YOLO stays installed but idle." if ai else
+            "The PC runs YOLO on the video stream and evaluates the polygon ROIs drawn in the ROI tab.")
+        self._on_type_changed()
+        self.detection_mode_changed.emit(self.current_mode().value)
+
+    def _on_brand_changed(self) -> None:
+        self.page_ai.set_brand(self.current_brand())
+
+    def _ai_test_camera(self) -> None:
+        self._apply()
+        self.ai_test_camera_requested.emit()
+
+    def _ai_test_event(self) -> None:
+        self._apply()
+        self.ai_test_event_requested.emit()
+
     def _on_type_changed(self) -> None:
         ct = self.current_type()
-        page = {CameraType.USB: 0, CameraType.VIDEO: 1, CameraType.RTSP: 2}.get(ct, 3)
+        if self.current_mode() == DetectionMode.AI_CAMERA:
+            page = 4
+        else:
+            page = {CameraType.USB: 0, CameraType.VIDEO: 1, CameraType.RTSP: 2}.get(ct, 3)
         for i in range(self.stack.count()):
             # only the visible page may claim vertical space, otherwise every page is as tall
             # as the tallest one and the card below it is pushed off screen
@@ -309,6 +374,11 @@ class CameraConfigWidget(QWidget):
                 QSizePolicy.Policy.Preferred if i == page else QSizePolicy.Policy.Ignored)
         self.stack.setCurrentIndex(page)
         self.stack.adjustSize()
+        if self.current_mode() == DetectionMode.AI_CAMERA:
+            self.lbl_sdk.setText("")
+            self.edt_cti.setEnabled(False)
+            self.btn_cti.setEnabled(False)
+            return
         ok, status = self._availability.get(ct, (True, "OK"))
         if ok:
             self.lbl_sdk.setText("" if ct in (CameraType.USB, CameraType.VIDEO, CameraType.RTSP) else "SDK detected.")
@@ -376,6 +446,8 @@ class CameraConfigWidget(QWidget):
         color = COLOR_TEXT_DIM if ok is None else (COLOR_OK if ok else COLOR_ERROR)
         self.lbl_status.setStyleSheet(f"color: {color};")
         self.lbl_status.setText(text)
+        if self.current_mode() == DetectionMode.AI_CAMERA:
+            self.page_ai.set_test_result(text, ok)
 
     def set_camera_state(self, state: str) -> None:
         connected = state in ("CONNECTED", "STREAMING", "FINISHED", "RECONNECTING")
@@ -386,6 +458,8 @@ class CameraConfigWidget(QWidget):
         self.btn_stop.setEnabled(streaming or state == "FINISHED")
         self.cmb_type.setEnabled(not connected)
         self.cmb_type.setToolTip("Disconnect the camera first to change its type" if connected else "")
+        self.cmb_mode.setEnabled(not connected)
+        self.cmb_mode.setToolTip("Disconnect the camera first to change the detection mode" if connected else "")
 
     def set_video_position(self, current: int, total: int) -> None:
         self.lbl_video_pos.setText(f"{current} / {total}")
@@ -395,8 +469,20 @@ class CameraConfigWidget(QWidget):
     # ------------------------------------------------------------------ config <-> widgets
     def set_config(self, cfg: CameraConfig) -> None:
         self._config = deepcopy(cfg)
+        for combo, value in ((self.cmb_mode, cfg.detection_mode), (self.cmb_brand, cfg.brand)):
+            combo.blockSignals(True)
+            idx = combo.findData(value)
+            combo.setCurrentIndex(max(0, idx))
+            combo.blockSignals(False)
         idx = self.cmb_type.findData(cfg.camera_type)
         self.cmb_type.setCurrentIndex(max(0, idx))
+        self.page_ai.set_config(cfg.ai_camera)
+        ai = cfg.is_ai_camera
+        self.g_type.setVisible(not ai)
+        self.lbl_mode_hint.setText(
+            "The camera detects people itself and sends events; the PC shows the RTSP picture and "
+            "drives the PLC. YOLO stays installed but idle." if ai else
+            "The PC runs YOLO on the video stream and evaluates the polygon ROIs drawn in the ROI tab.")
         self._on_type_changed()
         u = cfg.usb
         self.spn_usb_index.setValue(u.device_index)
@@ -455,6 +541,9 @@ class CameraConfigWidget(QWidget):
 
     def get_config(self) -> CameraConfig:
         cfg = deepcopy(self._config)
+        cfg.detection_mode = self.current_mode().value
+        cfg.brand = self.current_brand().value
+        cfg.ai_camera = self.page_ai.get_config()
         cfg.camera_type = self.current_type().value
         cfg.usb.device_index = self.spn_usb_index.value()
         cfg.usb.width = self.spn_usb_w.value()

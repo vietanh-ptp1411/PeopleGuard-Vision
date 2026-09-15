@@ -67,13 +67,29 @@ class StatusPanel(QWidget):
         l1 = QVBoxLayout(g1)
         l1.setSpacing(1)
         self.system_row = StatusRow("System", "STOPPED")
-        self.camera_row = StatusRow("Camera", "DISCONNECTED")
+        self.mode_row = StatusRow("Detection source", "-")
+        self.mode_row.led.hide()
+        self.camera_row = StatusRow("Video stream", "DISCONNECTED")
+        self.event_row = StatusRow("AI event channel", "-")
         self.ai_row = StatusRow("AI Detection", "STOPPED")
         self.plc_row = StatusRow("PLC", "DISCONNECTED")
         self.heartbeat_row = StatusRow("Heartbeat", "-")
-        for r in (self.system_row, self.camera_row, self.ai_row, self.plc_row, self.heartbeat_row):
+        for r in (self.system_row, self.mode_row, self.camera_row, self.event_row, self.ai_row,
+                  self.plc_row, self.heartbeat_row):
             l1.addWidget(r)
         lay.addWidget(g1)
+
+        g_last = QGroupBox("LAST CAMERA EVENT")
+        l_last = QVBoxLayout(g_last)
+        self.last_event_label = QLabel("-")
+        self.last_event_label.setWordWrap(True)
+        self.last_event_label.setStyleSheet(f"color: {COLOR_TEXT}; font-weight: 600;")
+        self.last_event_time = QLabel("")
+        self.last_event_time.setProperty("class", "muted")
+        l_last.addWidget(self.last_event_label)
+        l_last.addWidget(self.last_event_time)
+        self.group_last_event = g_last
+        lay.addWidget(g_last)
 
         # ---------------------------------------------------------- detection tiles
         g2 = QGroupBox("DETECTION")
@@ -137,6 +153,24 @@ class StatusPanel(QWidget):
 
     def set_ai(self, text: str, led: str) -> None:
         self.ai_row.set(text, led)
+
+    def set_event_channel(self, text: str, led: str) -> None:
+        self.event_row.set(text, led)
+
+    def set_detection_mode(self, text: str) -> None:
+        self.mode_row.set_value(text)
+
+    def set_ai_camera_mode(self, ai_camera: bool) -> None:
+        """Show only the rows that mean something in the active mode."""
+        self.event_row.setVisible(ai_camera)
+        self.group_last_event.setVisible(ai_camera)
+        self.ai_row.setVisible(not ai_camera)
+        self.tile_outside.setVisible(not ai_camera)
+        self.tile_ignored.setVisible(not ai_camera)
+
+    def set_last_event(self, text: str, when: str = "") -> None:
+        self.last_event_label.setText(text or "-")
+        self.last_event_time.setText(when)
 
     def set_plc(self, text: str, led: str) -> None:
         self.plc_row.set(text, led)

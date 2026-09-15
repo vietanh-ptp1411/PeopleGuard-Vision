@@ -112,3 +112,11 @@ class WorkflowBar(QWidget):
     def set_step(self, index: int, state: str, detail: str = "") -> None:
         if 0 <= index < len(self.chips):
             self.chips[index].set_state(state, detail)
+
+    def set_step_title(self, index: int, title: str, tooltip: str = "") -> None:
+        """The meaning of a step changes with the detection mode."""
+        if 0 <= index < len(self.chips):
+            chip = self.chips[index]
+            chip.title.setText(title)
+            if tooltip:
+                chip.setToolTip(tooltip)

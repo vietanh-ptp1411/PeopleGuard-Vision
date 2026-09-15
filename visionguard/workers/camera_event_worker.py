@@ -223,7 +223,8 @@ class CameraEventWorker(QThread):
         for event in events:
             if event.type_enum == CameraEventType.CAMERA_DISCONNECTED:
                 self.event_received.emit(event)
-                self._on_lost(event.description or "camera reported a disconnect")
+                # the provider already reported it, so _on_lost must not repeat the event
+                self._on_lost(event.description or "camera reported a disconnect", announce=False)
                 return
             self._events_seen += 1
             self._last_event_time = time.monotonic()
@@ -241,9 +242,10 @@ class CameraEventWorker(QThread):
         except Exception as exc:
             self._on_lost(f"health check error: {exc}")
 
-    def _on_lost(self, reason: str) -> None:
+    def _on_lost(self, reason: str, announce: bool = True) -> None:
         log.error("AI event channel lost: %s", reason)
-        self.event_received.emit(CameraEvent.health(CameraEventType.CAMERA_DISCONNECTED, reason))
+        if announce and self._state == EventChannelState.ONLINE:
+            self.event_received.emit(CameraEvent.health(CameraEventType.CAMERA_DISCONNECTED, reason))
         try:
             if self._provider is not None:
                 self._provider.stop_listening()
