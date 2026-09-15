@@ -15,9 +15,15 @@ from PySide6.QtCore import QObject, QTimer, Signal
 
 from ...camera.base_camera import Frame
 from ...camera.camera_manager import CameraManager
+from ...camera.events.camera_event import CameraEvent, CameraEventType
+from ...camera.events.event_manager import EventManager
 from ...camera.rtsp_camera import RtspCamera
+from ...camera.video.rtsp_receiver import RtspVideoReceiver
 from ...config.config_manager import ConfigManager
-from ...config.schemas import AIConfig, AppConfig, CameraConfig, CameraType, PlcConfig
+from ...config.region_mapping import RegionMapping, RegionMappingManager
+from ...config.schemas import (AIConfig, AppConfig, CameraConfig, CameraType, DetectionMode,
+                               EventProviderType, PlcConfig)
+from ...logic.camera_event_state_machine import CameraEventStateMachine, ZoneState
 from ...logic.occupancy_state_machine import AreaStatus, OccupancyTracker
 from ...logic.pipeline import PipelineResult, ProcessingPipeline
 from ...plc.plc_manager import WORD_AI_ERROR, WORD_CAMERA_ERROR, PlcOutputState
@@ -26,6 +32,7 @@ from ...roi.roi_model import RoiType
 from ...storage.event_repository import EventRepository, EventType
 from ...storage.snapshot_saver import SnapshotSaver
 from ...vision.yolo_detector import YoloDetector
+from ...workers.camera_event_worker import CameraEventWorker, EventChannelState
 from ...workers.camera_worker import CameraState, CameraWorker
 from ...workers.frame_buffer import LatestFrameBuffer
 from ...workers.inference_worker import InferenceWorker
@@ -35,6 +42,8 @@ log = logging.getLogger("SYSTEM")
 
 RESULT_TIMEOUT_S = 3.0   # no AI result for this long while RUNNING -> FAULT
 STARTUP_GRACE_S = 10.0   # after START: camera/AI may still be coming up -> STARTING, not FAULT
+EVENT_TICK_MS = 100      # AI Camera mode: how often the event debounce timers are advanced
+EVENT_HISTORY = 500      # camera events kept in memory for the monitor panel
 
 
 class SystemController(QObject):
@@ -45,10 +54,17 @@ class SystemController(QObject):
     frame_ready = Signal(object)
     devices_scanned = Signal(str, list)
     video_position = Signal(int, int)
-    # AI
+    # AI (PC / YOLO)
     result_ready = Signal(object)
     model_status = Signal(bool, str)
     detection_state = Signal(bool, str)
+    # AI camera events
+    camera_event = Signal(object)          # CameraEvent, for the event monitor
+    raw_camera_event = Signal(str)         # payload exactly as the camera sent it
+    event_channel_state = Signal(str, str) # EventChannelState, message
+    zone_states_changed = Signal(object)   # {region id: ZoneState}
+    detection_mode_changed = Signal(str)   # DetectionMode value
+    regions_changed = Signal()
     # PLC
     plc_state = Signal(bool, str)
     plc_latency = Signal(float)
@@ -72,7 +88,13 @@ class SystemController(QObject):
         self.roi_manager.load()
         self.roi_manager.add_listener(self._on_rois_changed)
 
+        self.region_mapping = RegionMappingManager(self.cm.region_mapping_file)
+        self.region_mapping.load()
+        self.region_mapping.add_listener(self._on_regions_changed)
+
         self.camera_manager = CameraManager()
+        self.event_manager = EventManager()
+        self.event_state = CameraEventStateMachine(self.settings.camera.ai_camera.logic)
         self.buffer = LatestFrameBuffer()
         self.detector = YoloDetector()
         self.pipeline = ProcessingPipeline(self.roi_manager, self.settings.ai.logic)
@@ -82,6 +104,8 @@ class SystemController(QObject):
         # workers
         self.camera_worker = CameraWorker(self.camera_manager, self.buffer, self.settings.camera)
         self.inference_worker = InferenceWorker(self.detector, self.buffer, self.pipeline)
+        self.event_worker = CameraEventWorker(self.event_manager, self.settings.camera.ai_camera,
+                                              self.settings.camera.brand_enum)
         self.plc_worker = PlcWorker(self.settings.plc)
         self._wire_workers()
 
@@ -103,17 +127,37 @@ class SystemController(QObject):
         self._in_fault = False
         self._system_msg = ""
         self._start_detection_when_loaded = False
+        # AI camera mode
+        self._event_channel = EventChannelState.DISCONNECTED
+        self._event_message = ""
+        self._last_camera_event: Optional[CameraEvent] = None
+        self._event_history: List[CameraEvent] = []
+        self._last_frame: Optional[Frame] = None
+        self._zone_states: Dict[str, ZoneState] = {}
+        self._area_was_occupied = False
 
         self._watchdog = QTimer(self)
         self._watchdog.setInterval(500)
         self._watchdog.timeout.connect(self._tick)
         self._watchdog.start()
 
-        for w in (self.camera_worker, self.inference_worker, self.plc_worker):
+        self._event_timer = QTimer(self)
+        self._event_timer.setInterval(EVENT_TICK_MS)
+        self._event_timer.timeout.connect(self._tick_events)
+
+        for w in (self.camera_worker, self.inference_worker, self.event_worker, self.plc_worker):
             w.start()
 
-        if self.settings.ai.detector.auto_load_on_start:
-            self.load_model()
+        if self.ai_camera_mode:
+            log.info("Detection mode: AI Camera (%s) - YOLO stays available but idle",
+                     self.settings.camera.brand_enum.label)
+            self._event_timer.start()
+            self.event_worker.request_connect()
+        else:
+            log.info("Detection mode: PC AI / YOLO")
+            self.event_worker.request_disable()
+            if self.settings.ai.detector.auto_load_on_start:
+                self.load_model()
         if self.settings.plc.simulation_mode:
             self.plc_connect()   # harmless: virtual PLC
 
@@ -131,6 +175,12 @@ class SystemController(QObject):
         iw.model_load_failed.connect(self._on_model_failed)
         iw.detection_state.connect(self._on_detection_state)
         iw.inference_error.connect(self._on_inference_error)
+        ew = self.event_worker
+        ew.event_received.connect(self._on_camera_event)
+        ew.state_changed.connect(self._on_event_channel_state)
+        ew.raw_event.connect(self.raw_camera_event)
+        ew.test_result.connect(self._on_event_test_result)
+        ew.provider_info.connect(lambda text: self.message.emit(f"Event provider: {text}"))
         pw = self.plc_worker
         pw.connection_changed.connect(self._on_plc_connection)
         pw.latency_changed.connect(self.plc_latency)
@@ -141,9 +191,20 @@ class SystemController(QObject):
 
     # ================================================================== camera slots
     def apply_camera_config(self, cfg: CameraConfig) -> None:
+        previous_mode = self.settings.camera.mode_enum
         self.settings.camera = cfg
         self.cm.save("camera")
         self.camera_worker.set_config(cfg)
+        self.event_state.set_config(cfg.ai_camera.logic)
+        if cfg.is_ai_camera:
+            self.event_worker.set_config(cfg.ai_camera, cfg.brand_enum)
+            if not self._event_timer.isActive():
+                self._event_timer.start()
+        else:
+            self._event_timer.stop()
+            self.event_worker.request_disable()
+        if cfg.mode_enum != previous_mode:
+            self.detection_mode_changed.emit(cfg.detection_mode)
         self.message.emit("Camera configuration saved")
 
     def camera_connect(self) -> None:
@@ -185,6 +246,93 @@ class SystemController(QObject):
 
         self.message.emit("Testing RTSP connection...")
         threading.Thread(target=_test, name="rtsp-test", daemon=True).start()
+
+    # ================================================================== detection mode
+    @property
+    def ai_camera_mode(self) -> bool:
+        return self.settings.camera.is_ai_camera
+
+    @property
+    def detection_mode(self) -> DetectionMode:
+        return self.settings.camera.mode_enum
+
+    def set_detection_mode(self, mode: DetectionMode) -> None:
+        """Switch between the camera's own AI and the PC YOLO pipeline."""
+        if mode == self.detection_mode:
+            return
+        was_running = self._system_running
+        if was_running:
+            self.stop_system()
+        self.settings.camera.detection_mode = mode.value
+        self.cm.save("camera")
+        self.camera_worker.set_config(self.settings.camera)
+        if mode == DetectionMode.AI_CAMERA:
+            self.inference_worker.stop_detection()
+            self.event_state.reset()
+            self.event_worker.set_config(self.settings.camera.ai_camera, self.settings.camera.brand_enum)
+            self.event_worker.request_connect()
+            self._event_timer.start()
+        else:
+            self._event_timer.stop()
+            self.event_worker.request_disable()
+        log.info("Detection mode changed to %s", mode.label)
+        self.message.emit(f"Detection mode: {mode.label}")
+        self.detection_mode_changed.emit(mode.value)
+        self.camera_disconnect()
+        self._recompute()
+        if was_running:
+            self.start_system()
+
+    # ================================================================== AI camera event channel
+    def event_channel_connect(self) -> None:
+        self.event_worker.request_connect()
+
+    def event_channel_disconnect(self) -> None:
+        self.event_worker.request_disconnect()
+
+    def test_ai_camera(self) -> None:
+        self.event_worker.request_test_camera()
+
+    def test_event_channel(self, seconds: float = 6.0) -> None:
+        self.message.emit(f"Listening to the camera event channel for {seconds:.0f}s...")
+        self.event_worker.request_test_event(seconds)
+
+    def simulate_event(self, action: str, region_id: str = "1") -> None:
+        self.event_worker.simulate(action, region_id)
+
+    def camera_events(self, limit: int = EVENT_HISTORY) -> List[CameraEvent]:
+        return self._event_history[-limit:]
+
+    @property
+    def last_camera_event(self) -> Optional[CameraEvent]:
+        return self._last_camera_event
+
+    @property
+    def event_channel_online(self) -> bool:
+        return self._event_channel == EventChannelState.ONLINE
+
+    def zone_states(self) -> Dict[str, ZoneState]:
+        return dict(self._zone_states)
+
+    # ================================================================== region mapping
+    def save_regions(self) -> bool:
+        ok = self.region_mapping.save()
+        self.message.emit("Region mapping saved" if ok else "Region mapping save FAILED (see log)")
+        return ok
+
+    def update_region(self, region_id: str, name: str, plc_device: str, enabled: bool) -> None:
+        self.region_mapping.upsert(RegionMapping(camera_region_id=str(region_id), name=name,
+                                                 plc_device=plc_device.upper(), enabled=enabled))
+        self.message.emit(f"Region {region_id} updated")
+
+    def delete_region(self, region_id: str) -> None:
+        if self.region_mapping.delete(region_id):
+            self.event_state.forget_zone(region_id)
+            self.message.emit(f"Region {region_id} removed")
+
+    def _on_regions_changed(self) -> None:
+        self.regions_changed.emit()
+        self._recompute()
 
     # ================================================================== AI slots
     def apply_ai_config(self, cfg: AIConfig) -> None:
@@ -298,25 +446,37 @@ class SystemController(QObject):
     def start_system(self) -> None:
         if self._system_running:
             return
-        if not self.roi_manager.include_rois():
+        ai_mode = self.ai_camera_mode
+        if not ai_mode and not self.roi_manager.include_rois():
             self.message.emit("Warning: no INCLUDE ROI defined - the area will never be OCCUPIED")
         self._system_running = True
         self._start_time = time.monotonic()
-        self._last_result = None
-        self._last_result_time = 0.0
         self._ai_error = ""
-        self.pipeline.reset()
-        log.info("SYSTEM START requested")
-        self._log_event(EventType.SYSTEM_START, details="Simulation" if self.settings.plc.simulation_mode else "Real PLC")
+        log.info("SYSTEM START requested (%s)", self.detection_mode.label)
+        self._log_event(EventType.SYSTEM_START,
+                        details=f"{self.detection_mode.label} / "
+                                f"{'Simulation' if self.settings.plc.simulation_mode else 'Real PLC'}")
         if self._camera_state != CameraState.STREAMING:
             self.camera_worker.request_start()
         if not self._plc_connected:
             self.plc_worker.request_connect()
-        if self._model_loaded:
-            self.inference_worker.start_detection()
+
+        if ai_mode:
+            # The camera is the detector: no model, no inference. Zone states are deliberately
+            # NOT reset - a person already reported inside stays inside.
+            if not self._event_timer.isActive():
+                self._event_timer.start()
+            if self._event_channel not in (EventChannelState.ONLINE, EventChannelState.CONNECTING):
+                self.event_worker.request_connect()
         else:
-            self._start_detection_when_loaded = True
-            self.load_model()
+            self._last_result = None
+            self._last_result_time = 0.0
+            self.pipeline.reset()
+            if self._model_loaded:
+                self.inference_worker.start_detection()
+            else:
+                self._start_detection_when_loaded = True
+                self.load_model()
         self._recompute()
 
     def stop_system(self) -> None:
@@ -324,7 +484,10 @@ class SystemController(QObject):
             return
         self._system_running = False
         self._start_detection_when_loaded = False
-        self.inference_worker.stop_detection()
+        if not self.ai_camera_mode:
+            self.inference_worker.stop_detection()
+        # In AI Camera mode the video and the event channel stay up so the operator keeps
+        # seeing the picture and the monitor; only the PLC output is released.
         log.info("SYSTEM STOP")
         self._log_event(EventType.SYSTEM_STOP)
         self._recompute(force_plc=True)
@@ -339,9 +502,11 @@ class SystemController(QObject):
                 time.sleep(0.15)  # let the PLC worker push the STOPPED state
         except Exception:
             pass
-        for w in (self.inference_worker, self.camera_worker, self.plc_worker):
+        self._event_timer.stop()
+        workers = (self.inference_worker, self.camera_worker, self.event_worker, self.plc_worker)
+        for w in workers:
             w.stop_worker()
-        for w in (self.inference_worker, self.camera_worker, self.plc_worker):
+        for w in workers:
             if not w.wait(3000):
                 log.warning("%s did not stop in time", type(w).__name__)
         self.snapshots.shutdown()
@@ -349,6 +514,7 @@ class SystemController(QObject):
 
     # ================================================================== worker callbacks
     def _on_frame(self, frame: Frame) -> None:
+        self._last_frame = frame          # newest picture, used for AI camera event snapshots
         self.frame_ready.emit(frame)
 
     def _on_camera_state(self, state: str, msg: str) -> None:
@@ -420,6 +586,74 @@ class SystemController(QObject):
         self._log_event(EventType.AI, details=f"Inference error: {msg}")
         self._recompute()
 
+    def _on_camera_event(self, event: CameraEvent) -> None:
+        """An alarm arrived from the camera (AI Camera mode)."""
+        self._event_history.append(event)
+        if len(self._event_history) > EVENT_HISTORY:
+            del self._event_history[: len(self._event_history) - EVENT_HISTORY]
+        self._last_camera_event = event
+        self.camera_event.emit(event)
+
+        etype = event.type_enum
+        if etype.is_health:
+            self._log_event(EventType.CAMERA, details=event.summary())
+            return
+        if event.region_id:
+            self.region_mapping.ensure(event.region_id)
+        if event.is_non_human_target:
+            log.info("Camera event ignored (%s is not a person): %s", event.target_enum.value, event.summary())
+            return
+        self.event_state.handle_event(event)
+        self._tick_events()
+
+    def _on_event_channel_state(self, state: str, msg: str) -> None:
+        previous = self._event_channel
+        self._event_channel = state
+        self._event_message = msg
+        self.event_channel_state.emit(state, msg)
+        if state == EventChannelState.ONLINE and previous != EventChannelState.ONLINE:
+            log.info("AI event channel ONLINE: %s", msg)
+            self._log_event(EventType.CAMERA, details=f"Event channel online: {msg}")
+        elif previous == EventChannelState.ONLINE and state != EventChannelState.ONLINE:
+            self._log_event(EventType.CAMERA, details=f"Event channel lost: {msg}")
+        self._recompute()
+
+    def _on_event_test_result(self, ok: bool, message: str) -> None:
+        self.camera_state.emit("TEST_OK" if ok else "TEST_FAIL", message)
+        self.message.emit(message)
+
+    def _tick_events(self) -> None:
+        """Advance the event debounce timers and publish whatever changed."""
+        if not self.ai_camera_mode:
+            return
+        transitions = self.event_state.tick()
+        states = self.event_state.zone_states()
+        if states != self._zone_states:
+            self._zone_states = states
+            self.zone_states_changed.emit(dict(states))
+        for tr in transitions:
+            name = self.region_mapping.name_for(tr.region_id)
+            if tr.occupied:
+                logging.getLogger("ROI").info("Person entered %s (region %s)", name, tr.region_id)
+                snap = (self.snapshots.save(self._last_frame.image, f"REGION_{tr.region_id}", "PERSON")
+                        if (self._system_running and self._last_frame is not None) else None)
+                self._log_event(EventType.PERSON_ENTERED, tr.region_id, name,
+                                snapshot_path=str(snap) if snap else "")
+            else:
+                logging.getLogger("ROI").info("Zone clear: %s (region %s)", name, tr.region_id)
+                self._log_event(EventType.PERSON_LEFT, tr.region_id, name)
+        occupied = self.event_state.area_occupied
+        if occupied != self._area_was_occupied:
+            self._area_was_occupied = occupied
+            if occupied:
+                log.info("AREA OCCUPIED (camera AI)")
+                self._log_event(EventType.AREA_OCCUPIED,
+                                details=", ".join(self.event_state.occupied_zone_ids()) or "camera event")
+            else:
+                log.info("AREA CLEAR (camera AI)")
+                self._log_event(EventType.AREA_CLEAR)
+        self._recompute()
+
     def _on_plc_connection(self, connected: bool, msg: str) -> None:
         prev = self._plc_connected
         self._plc_connected = connected
@@ -434,6 +668,9 @@ class SystemController(QObject):
     # ================================================================== status derivation
     def _tick(self) -> None:
         """Watchdog: detect a silent AI pipeline and emit drop statistics."""
+        if self.ai_camera_mode:
+            self.dropped_frames.emit(self.buffer.dropped)
+            return
         if self._system_running and self._camera_state == CameraState.STREAMING and not self._ai_error:
             now = time.monotonic()
             if self._last_result is not None and now - self._last_result_time > RESULT_TIMEOUT_S:
@@ -448,26 +685,50 @@ class SystemController(QObject):
 
     def _recompute(self, force_plc: bool = False) -> None:
         running = self._system_running
-        camera_ok = self._camera_state == CameraState.STREAMING
-        ai_ok = self._model_loaded and self._detecting and not self._ai_error
+        ai_mode = self.ai_camera_mode
+        logic = self.settings.camera.ai_camera.logic
+        video_ok = self._camera_state == CameraState.STREAMING
+
+        if ai_mode:
+            # The camera detects; the event channel is what must be alive. Once it is online,
+            # silence means "nobody in the zone", so there is always valid information.
+            detector_ok = self._event_channel == EventChannelState.ONLINE
+            has_data = detector_ok
+            detector_reason = self._event_message or "AI event channel offline"
+            # With simulated events there is no camera at all, so a missing picture is not a fault.
+            simulated = self.settings.camera.ai_camera.provider_enum == EventProviderType.MOCK
+            video_matters = bool(logic.fault_on_video_loss) and not simulated
+            detector_matters = bool(logic.fault_on_event_loss)
+            area_occupied = self.event_state.area_occupied
+        else:
+            detector_ok = self._model_loaded and self._detecting and not self._ai_error
+            has_data = self._last_result is not None
+            detector_reason = self._ai_error or "AI not running"
+            video_matters = True
+            detector_matters = True
+            area_occupied = bool(self._last_result.area_occupied) if self._last_result else False
+        camera_ok = video_ok
+
         fault, code, reason = False, 0, ""
         starting = False
         if running:
-            # Right after START the camera/model may still be coming up: report STARTING (not FAULT)
+            # Right after START the links may still be coming up: report STARTING (not FAULT)
             # unless a hard error is already known or the grace period is over.
-            in_grace = self._last_result is None and (time.monotonic() - self._start_time) < STARTUP_GRACE_S
-            hard_error = self._camera_state in (CameraState.LOST, CameraState.ERROR, CameraState.FINISHED) or bool(self._ai_error)
-            if not camera_ok:
+            in_grace = (not has_data) and (time.monotonic() - self._start_time) < STARTUP_GRACE_S
+            hard_error = self._camera_state in (CameraState.LOST, CameraState.ERROR, CameraState.FINISHED)
+            hard_error = hard_error or (self._event_channel == EventChannelState.ERROR if ai_mode
+                                        else bool(self._ai_error))
+            if video_matters and not video_ok:
                 if in_grace and not hard_error:
                     starting = True
                 else:
-                    fault, code, reason = True, WORD_CAMERA_ERROR, f"Camera {self._camera_state}"
-            elif not ai_ok:
+                    fault, code, reason = True, WORD_CAMERA_ERROR, f"Video {self._camera_state}"
+            elif detector_matters and not detector_ok:
                 if in_grace and not hard_error:
                     starting = True
                 else:
-                    fault, code, reason = True, WORD_AI_ERROR, self._ai_error or "AI not running"
-            elif self._last_result is None:
+                    fault, code, reason = True, WORD_AI_ERROR, detector_reason
+            elif not has_data:
                 starting = True
 
         if not running:
@@ -477,7 +738,7 @@ class SystemController(QObject):
         elif starting:
             area = "STARTING"
         else:
-            area = AreaStatus.OCCUPIED.value if self._last_result.area_occupied else AreaStatus.CLEAR.value
+            area = AreaStatus.OCCUPIED.value if area_occupied else AreaStatus.CLEAR.value
 
         if not running:
             system, msg = "STOPPED", ""
@@ -486,7 +747,9 @@ class SystemController(QObject):
         elif not self._plc_connected:
             system, msg = "FAULT", f"PLC disconnected ({self._plc_message})" if self._plc_message else "PLC disconnected"
         elif starting:
-            system, msg = "STARTING", f"Starting: camera {self._camera_state}, AI {'running' if ai_ok else 'starting'}"
+            detail = ("event channel " + self._event_channel.lower()) if ai_mode else \
+                     ("AI " + ("running" if detector_ok else "starting"))
+            system, msg = "STARTING", f"Starting: video {self._camera_state.lower()}, {detail}"
         else:
             system, msg = "RUNNING", ""
 
@@ -512,16 +775,22 @@ class SystemController(QObject):
         # ---- PLC output (only meaningful states; hold while STARTING)
         if running and area == "STARTING" and not fault:
             return
-        last = self._last_result
+        if ai_mode:
+            zone_occupied = self.event_state.zone_occupied()
+            zone_devices = self.region_mapping.devices()
+        else:
+            last = self._last_result
+            zone_occupied = dict(last.roi_occupied) if last else {}
+            zone_devices = {r.id: r.plc_device for r in self.roi_manager.include_rois() if r.plc_device}
         out = PlcOutputState(
             running=running,
-            area_occupied=bool(last.area_occupied) if (last and running) else False,
+            area_occupied=bool(area_occupied) if running else False,
             camera_ok=camera_ok,
-            ai_ok=ai_ok,
+            ai_ok=detector_ok,
             fault=fault,
             fault_code=code,
-            roi_occupied=dict(last.roi_occupied) if last else {},
-            roi_devices={r.id: r.plc_device for r in self.roi_manager.include_rois() if r.plc_device},
+            roi_occupied=zone_occupied,
+            roi_devices=zone_devices,
         )
         if force_plc or out != self._last_output:
             self._last_output = out
@@ -534,10 +803,16 @@ class SystemController(QObject):
             self.event_logged.emit(rec)
 
     def status_summary(self) -> Dict[str, str]:
+        if self.ai_camera_mode:
+            detector = self._event_channel
+        else:
+            detector = "RUNNING" if self._detecting else ("LOADED" if self._model_loaded else "STOPPED")
         return {
             "system": self._system,
             "area": self._area,
+            "mode": self.detection_mode.value,
             "camera": self._camera_state,
-            "ai": "RUNNING" if self._detecting else ("LOADED" if self._model_loaded else "STOPPED"),
+            "ai": detector,
+            "event_channel": self._event_channel,
             "plc": "CONNECTED" if self._plc_connected else "DISCONNECTED",
         }
