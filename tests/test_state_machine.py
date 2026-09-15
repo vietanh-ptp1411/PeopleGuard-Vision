@@ -1,5 +1,5 @@
-from person_safety_vision.logic.debounce import DebounceConfig, Debouncer
-from person_safety_vision.logic.occupancy_state_machine import OccupancyState, OccupancyStateMachine, OccupancyTracker
+from visionguard.logic.debounce import DebounceConfig, Debouncer
+from visionguard.logic.occupancy_state_machine import OccupancyState, OccupancyStateMachine, OccupancyTracker
 
 CFG = DebounceConfig(on_delay_ms=200, off_delay_ms=1000, min_detection_frames=3)
 DT = 1 / 30  # 30 fps

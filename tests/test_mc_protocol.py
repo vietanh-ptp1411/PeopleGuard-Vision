@@ -8,11 +8,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 
 from mc_plc_simulator import McPlcSimulator  # noqa: E402
 
-from person_safety_vision.config.schemas import PlcConnectionConfig  # noqa: E402
-from person_safety_vision.plc.base_plc import PlcError  # noqa: E402
-from person_safety_vision.plc.device_address import DeviceAddressError, parse_device  # noqa: E402
-from person_safety_vision.plc.mitsubishi.mc_driver import MitsubishiMCDriver  # noqa: E402
-from person_safety_vision.plc.mitsubishi.mc_protocol import McFrameConfig, McProtocol3E, McProtocolError  # noqa: E402
+from visionguard.config.schemas import PlcConnectionConfig  # noqa: E402
+from visionguard.plc.base_plc import PlcError  # noqa: E402
+from visionguard.plc.device_address import DeviceAddressError, parse_device  # noqa: E402
+from visionguard.plc.mitsubishi.mc_driver import MitsubishiMCDriver  # noqa: E402
+from visionguard.plc.mitsubishi.mc_protocol import McFrameConfig, McProtocol3E, McProtocolError  # noqa: E402
 
 
 def test_parse_device():

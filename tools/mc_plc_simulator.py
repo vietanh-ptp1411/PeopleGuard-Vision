@@ -21,7 +21,7 @@ from typing import Dict, Optional, Tuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from person_safety_vision.plc.device_address import DEVICE_TABLE  # noqa: E402
+from visionguard.plc.device_address import DEVICE_TABLE  # noqa: E402
 
 CODE_TO_DEVICE = {v[0]: k for k, v in DEVICE_TABLE.items()}
 ASCII_TO_DEVICE = {v[3]: k for k, v in DEVICE_TABLE.items()}

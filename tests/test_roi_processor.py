@@ -1,10 +1,10 @@
 import json
 
-from person_safety_vision.config.schemas import ContainmentMode
-from person_safety_vision.roi.roi_manager import RoiManager
-from person_safety_vision.roi.roi_model import Roi, RoiType
-from person_safety_vision.roi.roi_processor import RoiProcessor
-from person_safety_vision.vision.detection import BBox, Detection, DetectionZoneStatus
+from visionguard.config.schemas import ContainmentMode
+from visionguard.roi.roi_manager import RoiManager
+from visionguard.roi.roi_model import Roi, RoiType
+from visionguard.roi.roi_processor import RoiProcessor
+from visionguard.vision.detection import BBox, Detection, DetectionZoneStatus
 
 W, H = 1000, 1000
 INCLUDE = Roi("ROI_001", "Robot Zone", RoiType.INCLUDE, True,

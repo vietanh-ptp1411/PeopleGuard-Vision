@@ -1,6 +1,6 @@
 import math
 
-from person_safety_vision.roi.geometry import (bbox_polygon_intersection_ratio, clip_polygon_to_rect, nearest_edge,
+from visionguard.roi.geometry import (bbox_polygon_intersection_ratio, clip_polygon_to_rect, nearest_edge,
                                                 nearest_vertex, point_in_polygon, polygon_area, polygon_centroid)
 
 SQUARE = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)]
