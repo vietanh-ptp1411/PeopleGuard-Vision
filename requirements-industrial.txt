@@ -1,0 +1,9 @@
+# Optional SDK / feature packages. Cai rieng tuy nhu cau.
+# Basler pylon (can cai Pylon Runtime/SDK truoc):
+pypylon>=3.0
+# Generic GenICam qua GenTL (.cti) producer:
+harvesters>=1.4
+# ByteTrack tracking cho ultralytics (Person ID):
+lap>=0.5.12
+# Hikrobot MVS SDK: khong co tren PyPI. Cai MVS tu Hikrobot, sau do them
+#   <MVS>/Development/Samples/Python/MvImport  vao PYTHONPATH.

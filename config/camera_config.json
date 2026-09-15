@@ -1,0 +1,48 @@
+{
+  "camera_type": "usb",
+  "usb": {
+    "device_index": 0,
+    "width": 1280,
+    "height": 720,
+    "fps": 30,
+    "backend": "auto"
+  },
+  "video": {
+    "path": "",
+    "loop": true,
+    "realtime": true,
+    "start_paused": false
+  },
+  "rtsp": {
+    "url": "",
+    "ip": "192.168.1.100",
+    "port": 554,
+    "username": "",
+    "password": "",
+    "path": "/Streaming/Channels/101",
+    "transport": "tcp",
+    "open_timeout_ms": 5000,
+    "read_timeout_ms": 5000,
+    "vendor_preset": "generic"
+  },
+  "industrial": {
+    "serial_number": "",
+    "exposure_us": 10000.0,
+    "gain": 0.0,
+    "frame_rate": 30.0,
+    "trigger_mode": "off",
+    "pixel_format": "auto",
+    "grab_timeout_ms": 2000,
+    "cti_path": ""
+  },
+  "reconnect": {
+    "enabled": true,
+    "frame_timeout_s": 0.5,
+    "delays_s": [
+      1.0,
+      2.0,
+      5.0
+    ],
+    "max_attempts": 0
+  }
+}
