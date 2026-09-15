@@ -1,0 +1,25 @@
+{
+  "detector": {
+    "model_path": "models/yolo11n.pt",
+    "confidence": 0.4,
+    "iou": 0.5,
+    "device": "auto",
+    "imgsz": 640,
+    "classes": [
+      0
+    ],
+    "max_det": 50,
+    "half": false,
+    "tracking_enabled": false,
+    "tracker": "bytetrack.yaml",
+    "auto_download": true,
+    "auto_load_on_start": true
+  },
+  "logic": {
+    "containment_mode": "foot_point",
+    "intersection_threshold": 0.3,
+    "on_delay_ms": 200,
+    "off_delay_ms": 1000,
+    "min_detection_frames": 3
+  }
+}

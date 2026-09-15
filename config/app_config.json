@@ -1,0 +1,25 @@
+{
+  "log_level": "INFO",
+  "events_db_path": "events/events.db",
+  "ui_fps_limit": 30,
+  "snapshot": {
+    "enabled": true,
+    "directory": "events",
+    "jpeg_quality": 90
+  },
+  "visualization": {
+    "color_roi_include": "#FFD400",
+    "color_roi_include_occupied": "#FF3B30",
+    "color_roi_exclude": "#8E8E93",
+    "color_roi_editing": "#00C7FF",
+    "color_person": "#34C759",
+    "color_person_in_roi": "#FF3B30",
+    "color_person_ignored": "#8E8E93",
+    "color_point": "#FFFFFF",
+    "line_width": 2,
+    "show_confidence": true,
+    "show_ids": true,
+    "show_points": true,
+    "show_labels": true
+  }
+}

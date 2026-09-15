@@ -1,0 +1,44 @@
+{
+  "simulation_mode": true,
+  "signal_mode": "dual_bit",
+  "word_output_enabled": true,
+  "connection": {
+    "plc_type": "mitsubishi",
+    "protocol": "mc_protocol",
+    "plc_series": "Q Series",
+    "ip": "192.168.1.10",
+    "port": 5000,
+    "frame": "3E",
+    "frame_format": "binary",
+    "network_no": 0,
+    "pc_no": 255,
+    "dest_module_io": 1023,
+    "dest_module_station": 0,
+    "timeout_s": 2.0,
+    "retry_count": 2,
+    "auto_reconnect": true,
+    "reconnect_delays_s": [
+      1.0,
+      2.0,
+      5.0
+    ]
+  },
+  "mapping": {
+    "device_person": "M100",
+    "device_clear": "M101",
+    "device_camera_ok": "M102",
+    "device_ai_running": "M103",
+    "device_fault": "M104",
+    "device_heartbeat": "M110",
+    "device_status_word": "D100",
+    "write_roi_devices": true
+  },
+  "heartbeat": {
+    "enabled": true,
+    "interval_ms": 500
+  },
+  "failsafe": {
+    "person_output_on_fault": "hold",
+    "clear_off_on_fault": true
+  }
+}
