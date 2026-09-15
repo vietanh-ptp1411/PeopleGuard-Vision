@@ -15,6 +15,53 @@ from typing import List
 
 
 # --------------------------------------------------------------------------- enums
+class DetectionMode(str, Enum):
+    """Where the person detection happens."""
+    AI_CAMERA = "ai_camera"   # the camera detects and sends events; the PC only shows video
+    PC_YOLO = "pc_yolo"       # the PC runs YOLO on the video stream (legacy pipeline)
+
+    @property
+    def label(self) -> str:
+        return {
+            DetectionMode.AI_CAMERA: "AI Camera (camera detects)",
+            DetectionMode.PC_YOLO: "PC AI / YOLO (software detects)",
+        }[self]
+
+
+class CameraBrand(str, Enum):
+    HIKVISION = "hikvision"
+    DAHUA = "dahua"
+    GENERIC = "generic"
+    USB = "usb"
+    INDUSTRIAL = "industrial"
+
+    @property
+    def label(self) -> str:
+        return {
+            CameraBrand.HIKVISION: "Hikvision",
+            CameraBrand.DAHUA: "Dahua",
+            CameraBrand.GENERIC: "Generic (ONVIF / HTTP)",
+            CameraBrand.USB: "USB Camera",
+            CameraBrand.INDUSTRIAL: "Industrial Camera",
+        }[self]
+
+
+class EventProviderType(str, Enum):
+    ISAPI = "isapi"                 # Hikvision /ISAPI/Event/notification/alertStream
+    DAHUA_HTTP = "dahua_http"       # Dahua cgi-bin/eventManager.cgi?action=attach
+    GENERIC_HTTP = "generic_http"   # any camera posting/streaming JSON or XML
+    MOCK = "mock"                   # simulated events, no camera needed
+
+    @property
+    def label(self) -> str:
+        return {
+            EventProviderType.ISAPI: "Hikvision ISAPI alertStream",
+            EventProviderType.DAHUA_HTTP: "Dahua HTTP eventManager",
+            EventProviderType.GENERIC_HTTP: "Generic HTTP (JSON/XML)",
+            EventProviderType.MOCK: "Simulated events (no camera)",
+        }[self]
+
+
 class CameraType(str, Enum):
     USB = "usb"
     VIDEO = "video"
@@ -119,8 +166,70 @@ class ReconnectConfig:
 
 
 @dataclass
+class EventLogicConfig:
+    """Debounce and interpretation rules for camera AI events."""
+    on_delay_ms: int = 200            # event must stay active this long before OCCUPIED
+    off_delay_ms: int = 800           # area must stay quiet this long before CLEAR
+    clear_timeout_s: float = 5.0      # no re-trigger for this long = cleared (cameras that never send "inactive")
+    line_cross_hold_s: float = 3.0    # a line crossing is a pulse: hold OCCUPIED this long (0 = ignore)
+    use_person_count: bool = True     # count REGION_ENTER / REGION_EXIT per region
+    strict_human_only: bool = False   # True: drop events whose target type is unknown
+    fault_on_event_loss: bool = True  # event channel down -> FAULT (never a fake CLEAR)
+    fault_on_video_loss: bool = True  # RTSP down -> FAULT as well
+    unmapped_regions_count: bool = True   # regions without a mapping still drive the global area state
+
+
+@dataclass
+class AiCameraConfig:
+    """An AI camera that detects people itself: RTSP for video, an event channel for alarms."""
+    ip: str = "192.168.1.64"
+    http_port: int = 80
+    rtsp_port: int = 554
+    username: str = "admin"
+    password: str = ""
+    use_https: bool = False
+    rtsp_url: str = ""                 # empty -> built from ip / rtsp_port / channel
+    rtsp_channel: str = "101"          # Hikvision: 101 main stream, 102 sub stream
+    rtsp_transport: str = "tcp"
+    event_provider: str = EventProviderType.ISAPI.value
+    event_url: str = ""                # empty -> provider default path
+    event_timeout_s: float = 2.0       # socket read timeout on the event stream
+    health_interval_s: float = 30.0    # periodic device check on the event channel
+    reconnect_delays_s: List[float] = field(default_factory=lambda: [1.0, 2.0, 5.0])
+    channels: List[int] = field(default_factory=list)   # empty = accept every channel
+    logic: EventLogicConfig = field(default_factory=EventLogicConfig)
+
+    @property
+    def provider_enum(self) -> EventProviderType:
+        try:
+            return EventProviderType(self.event_provider)
+        except ValueError:
+            return EventProviderType.ISAPI
+
+    def base_url(self) -> str:
+        scheme = "https" if self.use_https else "http"
+        port = f":{self.http_port}" if self.http_port not in (80, 443) else ""
+        return f"{scheme}://{self.ip}{port}"
+
+    def to_rtsp_config(self) -> "RtspCameraConfig":
+        """Video settings for the RTSP receiver, derived from the AI camera settings."""
+        return RtspCameraConfig(
+            url=self.rtsp_url.strip(),
+            ip=self.ip,
+            port=self.rtsp_port,
+            username=self.username,
+            password=self.password,
+            path=f"/Streaming/Channels/{self.rtsp_channel}",
+            transport=self.rtsp_transport,
+        )
+
+
+@dataclass
 class CameraConfig:
-    camera_type: str = CameraType.USB.value
+    detection_mode: str = DetectionMode.AI_CAMERA.value   # AI camera first, YOLO stays available
+    brand: str = CameraBrand.HIKVISION.value
+    camera_type: str = CameraType.USB.value               # video source for PC AI / YOLO mode
+    ai_camera: AiCameraConfig = field(default_factory=AiCameraConfig)
     usb: UsbCameraConfig = field(default_factory=UsbCameraConfig)
     video: VideoCameraConfig = field(default_factory=VideoCameraConfig)
     rtsp: RtspCameraConfig = field(default_factory=RtspCameraConfig)
@@ -133,6 +242,24 @@ class CameraConfig:
             return CameraType(self.camera_type)
         except ValueError:
             return CameraType.USB
+
+    @property
+    def mode_enum(self) -> DetectionMode:
+        try:
+            return DetectionMode(self.detection_mode)
+        except ValueError:
+            return DetectionMode.AI_CAMERA
+
+    @property
+    def brand_enum(self) -> CameraBrand:
+        try:
+            return CameraBrand(self.brand)
+        except ValueError:
+            return CameraBrand.GENERIC
+
+    @property
+    def is_ai_camera(self) -> bool:
+        return self.mode_enum == DetectionMode.AI_CAMERA
 
 
 # --------------------------------------------------------------------------- AI
