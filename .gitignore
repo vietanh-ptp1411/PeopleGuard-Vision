@@ -1,8 +1,11 @@
 .venv/
 __pycache__/
 *.pyc
-logs/
-events/
-models/*.pt
-config/*.tmp
 .pytest_cache/
+
+# runtime output directories at the repo root only - the leading slash matters:
+# a bare "events/" would also ignore visionguard/camera/events/ (the source package)
+/logs/
+/events/
+/models/*.pt
+/config/*.tmp
