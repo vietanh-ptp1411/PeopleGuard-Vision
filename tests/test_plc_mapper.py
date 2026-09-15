@@ -1,5 +1,5 @@
-from person_safety_vision.config.schemas import FaultPersonOutput, PlcConfig, SignalMode
-from person_safety_vision.plc.plc_manager import (WORD_AI_ERROR, WORD_CAMERA_ERROR, WORD_CLEAR, WORD_NOT_RUNNING,
+from visionguard.config.schemas import FaultPersonOutput, PlcConfig, SignalMode
+from visionguard.plc.plc_manager import (WORD_AI_ERROR, WORD_CAMERA_ERROR, WORD_CLEAR, WORD_NOT_RUNNING,
                                                   WORD_OCCUPIED, PlcManager, PlcOutputMapper, PlcOutputState)
 
 

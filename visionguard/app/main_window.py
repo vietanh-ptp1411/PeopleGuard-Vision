@@ -86,7 +86,7 @@ def _separator() -> QFrame:
 class MainWindow(QMainWindow):
     def __init__(self, config_manager: ConfigManager) -> None:
         super().__init__()
-        self.setWindowTitle("PeopleGuard Vision - Person-in-Area Monitoring (YOLO -> ROI -> Mitsubishi MC Protocol)")
+        self.setWindowTitle("VisionGuard - Person-in-Area Monitoring (YOLO -> ROI -> Mitsubishi MC Protocol)")
         self.resize(1560, 960)
         self.ctrl = SystemController(config_manager, self)
         s = self.ctrl.settings

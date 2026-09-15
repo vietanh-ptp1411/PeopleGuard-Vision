@@ -1,7 +1,7 @@
 import json
 
-from person_safety_vision.config.config_manager import ConfigManager, from_dict, to_dict
-from person_safety_vision.config.schemas import CameraConfig, CameraType, PlcConfig
+from visionguard.config.config_manager import ConfigManager, from_dict, to_dict
+from visionguard.config.schemas import CameraConfig, CameraType, PlcConfig
 
 
 def test_defaults_are_created(tmp_path):

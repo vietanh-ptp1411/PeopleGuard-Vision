@@ -1,4 +1,4 @@
-"""PeopleGuard Vision - entry point.
+"""VisionGuard - entry point.
 
     python main.py                 # normal start
     python main.py --log-level DEBUG
@@ -20,7 +20,7 @@ sys.path.insert(0, str(PROJECT_DIR))
 os.environ.setdefault("OPENCV_LOG_LEVEL", "ERROR")
 os.environ.setdefault("OPENCV_FFMPEG_CAPTURE_OPTIONS", "rtsp_transport;tcp")
 
-from person_safety_vision.utils.logger import setup_logging  # noqa: E402
+from visionguard.utils.logger import setup_logging  # noqa: E402
 
 
 def _install_excepthook() -> None:
@@ -31,12 +31,12 @@ def _install_excepthook() -> None:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="PeopleGuard Vision")
+    parser = argparse.ArgumentParser(description="VisionGuard")
     parser.add_argument("--log-level", default=None, help="DEBUG / INFO / WARNING")
     parser.add_argument("--config-dir", default="config")
     args = parser.parse_args()
 
-    from person_safety_vision.config.config_manager import ConfigManager
+    from visionguard.config.config_manager import ConfigManager
 
     cm = ConfigManager(args.config_dir)
     settings = cm.load_all()
@@ -45,24 +45,24 @@ def main() -> int:
     _install_excepthook()
     log = logging.getLogger("SYSTEM")
     log.info("=" * 60)
-    log.info("PeopleGuard Vision starting (python %s)", sys.version.split()[0])
+    log.info("VisionGuard starting (python %s)", sys.version.split()[0])
 
     from PySide6.QtCore import Qt
     from PySide6.QtWidgets import QApplication
 
-    from person_safety_vision.app.main_window import MainWindow
-    from person_safety_vision.app.theme import apply_theme
+    from visionguard.app.main_window import MainWindow
+    from visionguard.app.theme import apply_theme
 
     QApplication.setHighDpiScaleFactorRoundingPolicy(Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
     app = QApplication(sys.argv)
-    app.setApplicationName("PeopleGuard Vision")
-    app.setOrganizationName("PeopleGuard")
+    app.setApplicationName("VisionGuard")
+    app.setOrganizationName("VisionGuard")
     apply_theme(app)
 
     window = MainWindow(cm)
     window.showMaximized()   # industrial HMI: always start on the full screen (F11 = borderless)
     code = app.exec()
-    log.info("PeopleGuard Vision exited (%d)", code)
+    log.info("VisionGuard exited (%d)", code)
     return code
 
 

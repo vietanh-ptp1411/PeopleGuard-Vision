@@ -1,4 +1,4 @@
-# PeopleGuard Vision
+# VisionGuard
 
 Ứng dụng desktop công nghiệp: **Camera → YOLO (person) → ROI polygon / exclusion zone → debounce → PLC Mitsubishi (MC Protocol 3E)**.
 
@@ -42,12 +42,12 @@ Nguyên tắc:
 ## 2. Cấu trúc thư mục
 
 ```
-PeopleGuard Vision/
+VisionGuard/
 ├─ main.py                         # entry point
 ├─ requirements.txt                # core: PySide6, opencv-python, numpy, ultralytics
 ├─ requirements-industrial.txt     # optional: pypylon, harvesters, lap
 ├─ requirements-dev.txt            # pytest
-├─ person_safety_vision/
+├─ visionguard/
 │  ├─ app/
 │  │  ├─ main_window.py            # layout + wiring
 │  │  ├─ theme.py                  # light industrial palette + QSS
@@ -77,7 +77,7 @@ PeopleGuard Vision/
 Yêu cầu **Python 3.11+** (đã kiểm thử với 3.12 trên Windows 11).
 
 ```bat
-cd "D:\PeopleGuard Vision"
+cd "D:\VisionGuard"
 python -m venv .venv
 .venv\Scripts\activate
 python -m pip install --upgrade pip
@@ -140,7 +140,7 @@ Trạng thái khu vực hiển thị đồng thời ở 3 chỗ để đọc đ�
 camera và ô lớn trong tab Status — `AREA CLEAR` (xanh lá) / `PERSON DETECTED` (đỏ) / `FAULT` (vàng) /
 `STARTING…` (xanh dương) / `STOPPED` (xám).
 
-Toàn bộ màu nằm trong `person_safety_vision/app/theme.py` (token + QSS). Đổi bảng màu ở một chỗ là cả
+Toàn bộ màu nằm trong `visionguard/app/theme.py` (token + QSS). Đổi bảng màu ở một chỗ là cả
 ứng dụng đổi theo; màu vẽ lên hình camera nằm riêng trong `VisualizationConfig` của `app_config.json`.
 
 ### Chạy thử nhanh bằng video - nút TEST VIDEO
