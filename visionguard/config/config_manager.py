@@ -104,6 +104,11 @@ class ConfigManager:
     def roi_file(self) -> Path:
         return self.config_dir / "roi_config.json"
 
+    @property
+    def region_mapping_file(self) -> Path:
+        """AI Camera mode: camera region id -> name + PLC device."""
+        return self.config_dir / "region_mapping.json"
+
     def path_for(self, key: str) -> Path:
         return self.config_dir / self.FILES[key]
 
