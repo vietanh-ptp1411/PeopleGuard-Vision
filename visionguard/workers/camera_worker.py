@@ -150,7 +150,7 @@ class CameraWorker(QThread):
     def _do_connect(self) -> bool:
         self._do_disconnect(silent=True)
         self._set_state(CameraState.CONNECTING, "Connecting...")
-        cam = self._manager.create_camera(self._config)
+        cam = self._manager.create_video_source(self._config)
         if not cam.connect():
             self._camera = None
             self._set_state(CameraState.ERROR, cam.last_error or "connect failed")
@@ -200,7 +200,7 @@ class CameraWorker(QThread):
 
     def _do_test(self) -> None:
         """Open, grab one frame, close - without touching the running camera."""
-        cam = self._manager.create_camera(self._config)
+        cam = self._manager.create_video_source(self._config)
         t0 = time.perf_counter()
         ok = cam.connect() and cam.start()
         frame = cam.get_frame(2.0) if ok else None
@@ -296,7 +296,7 @@ class CameraWorker(QThread):
             return
         self._reconnect_attempt += 1
         log.info("Camera reconnect attempt %d", self._reconnect_attempt)
-        cam = self._manager.create_camera(self._config)
+        cam = self._manager.create_video_source(self._config)
         if cam.connect() and cam.start():
             self._camera = cam
             self._buffer.clear()

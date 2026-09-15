@@ -92,9 +92,12 @@ class SimulatedPLC(BasePLC):
         with self._lock:
             for i, v in enumerate(values):
                 key = (a.device, a.number + i)
-                if self._bits.get(key, False) != bool(v):
-                    self._bits[key] = bool(v)
-                    changed.append((str(DeviceAddress(*key)), int(bool(v))))
+                value = bool(v)
+                # `.get(key)` without a default: the first write to a device always counts as a
+                # change, so writing OFF to an untouched bit still shows up in the memory table.
+                if self._bits.get(key) != value:
+                    changed.append((str(DeviceAddress(*key)), int(value)))
+                self._bits[key] = value
             self.write_count += len(values)
         for dev, val in changed:
             self._notify(dev, val)
@@ -134,16 +137,16 @@ class SimulatedPLC(BasePLC):
                 v &= 0xFFFF
                 if a.is_word:
                     key = (a.device, a.number + i)
-                    if self._words.get(key, 0) != v:
-                        self._words[key] = v
+                    if self._words.get(key) != v:
                         changed.append((str(DeviceAddress(*key)), v))
+                    self._words[key] = v
                 else:
                     for b in range(16):
                         key = (a.device, a.number + i * 16 + b)
                         bit = bool((v >> b) & 1)
-                        if self._bits.get(key, False) != bit:
-                            self._bits[key] = bit
+                        if self._bits.get(key) != bit:
                             changed.append((str(DeviceAddress(*key)), int(bit)))
+                        self._bits[key] = bit
             self.write_count += len(values)
         for dev, val in changed:
             self._notify(dev, val)
