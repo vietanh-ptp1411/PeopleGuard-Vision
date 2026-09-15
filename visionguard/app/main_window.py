@@ -24,9 +24,11 @@ from PySide6.QtGui import QAction, QCloseEvent, QKeySequence
 from PySide6.QtWidgets import (QFileDialog, QFrame, QHBoxLayout, QLabel, QMainWindow, QMessageBox, QPushButton,
                                QSizePolicy, QSplitter, QTabWidget, QToolBar, QVBoxLayout, QWidget)
 
+from ..camera.events.camera_event import CameraEvent
 from ..camera.video_camera import VIDEO_EXTENSIONS
 from ..config.config_manager import ConfigManager
-from ..config.schemas import CameraType
+from ..config.schemas import CameraType, DetectionMode, EventProviderType
+from ..logic.camera_event_state_machine import ZoneState
 from ..logic.occupancy_state_machine import OccupancyState
 from ..roi.roi_model import RoiType
 from ..utils.logger import try_import_qt_handler
@@ -36,6 +38,7 @@ from .theme import (COLOR_BORDER_STRONG, COLOR_TEXT_DIM, COLOR_TEXT_MUTED, contr
                     status_color)
 from .widgets.ai_config_widget import AIConfigWidget
 from .widgets.camera_config_widget import CameraConfigWidget
+from .widgets.event_monitor_widget import EventMonitorWidget
 from .widgets.events_widget import EventsWidget
 from .widgets.io_test_widget import IoTestWidget
 from .widgets.led_indicator import LedIndicator
@@ -43,7 +46,7 @@ from .widgets.log_widget import LogWidget
 from .widgets.plc_config_widget import PlcConfigWidget
 from .widgets.roi_panel import RoiPanel
 from .widgets.status_panel import StatusPanel
-from .widgets.video_view import VideoView
+from .widgets.video_view import PLACEHOLDER_AI_CAMERA, PLACEHOLDER_YOLO, VideoView
 from .widgets.workflow_bar import WorkflowBar
 
 log = logging.getLogger("UI")
@@ -52,10 +55,11 @@ SAFETY_NOTE_SHORT = "NOT a safety-rated protective device - monitoring only"
 SAFETY_NOTE = ("Monitoring system only - NOT a safety-rated protective device. "
                "Use certified safety PLC / sensors for personnel protection.")
 
-TAB_STATUS, TAB_CAMERA, TAB_AI, TAB_ROI, TAB_PLC, TAB_IO, TAB_EVENTS = range(7)
+TAB_STATUS, TAB_CAMERA, TAB_EVENT, TAB_AI, TAB_ROI, TAB_PLC, TAB_IO, TAB_EVENTS = range(8)
 #: zone created automatically by the video demo when the user has not drawn one yet
 DEMO_ROI_POINTS = [(0.08, 0.08), (0.92, 0.08), (0.92, 0.92), (0.08, 0.92)]
 STEP_TO_TAB = {0: TAB_CAMERA, 1: TAB_AI, 2: TAB_ROI, 3: TAB_PLC, 4: TAB_STATUS}
+STEP_TO_TAB_AI = {0: TAB_CAMERA, 1: TAB_EVENT, 2: TAB_EVENT, 3: TAB_PLC, 4: TAB_STATUS}
 
 
 def _button(text: str, cls: str = "", size: str = "", tooltip: str = "") -> QPushButton:
@@ -97,6 +101,9 @@ class MainWindow(QMainWindow):
         self._model_error = ""
         self._detecting = False
         self._plc_connected = False
+        self._event_channel = "DISCONNECTED"
+        self._event_message = ""
+        self._ai_camera_mode = True
         self._system_state = "STOPPED"
         self._system_message = ""
         self._roi_states: Dict[str, OccupancyState] = {}
@@ -110,6 +117,7 @@ class MainWindow(QMainWindow):
         self.roi_panel = RoiPanel()
         self.io_test = IoTestWidget(s.plc.mapping)
         self.events_widget = EventsWidget()
+        self.event_monitor = EventMonitorWidget()
         self.log_widget = LogWidget()
         self.workflow = WorkflowBar()
 
@@ -124,6 +132,9 @@ class MainWindow(QMainWindow):
         self.log_widget.set_log_file(f"logs/{datetime.now():%Y-%m-%d}.log")
         self._apply_area("STOPPED")
         self.status_panel.set_heartbeat(None, s.plc.heartbeat.enabled)
+        self.event_monitor.set_regions(self.ctrl.region_mapping.all())
+        self.event_monitor.set_events(self.ctrl.camera_events(120))
+        self._apply_detection_mode(s.camera.detection_mode)
         self._update_camera_buttons(CameraState.DISCONNECTED)
         self._update_workflow()
 
@@ -243,7 +254,8 @@ class MainWindow(QMainWindow):
         self.tabs = QTabWidget()
         self.tabs.addTab(self.status_panel, "Status")
         self.tabs.addTab(self.camera_cfg, "1 Camera")
-        self.tabs.addTab(self.ai_cfg, "2 AI")
+        self.tabs.addTab(self.event_monitor, "2 AI Event")
+        self.tabs.addTab(self.ai_cfg, "YOLO")
         self.tabs.addTab(self.roi_panel, "3 ROI")
         self.tabs.addTab(self.plc_cfg, "4 PLC")
         self.tabs.addTab(self.io_test, "I/O")
@@ -345,6 +357,12 @@ class MainWindow(QMainWindow):
         c.video_position.connect(self.camera_cfg.set_video_position)
         c.model_status.connect(self._on_model_status)
         c.detection_state.connect(self._on_detection_state)
+        c.camera_event.connect(self._on_camera_event)
+        c.raw_camera_event.connect(self.event_monitor.add_raw)
+        c.event_channel_state.connect(self._on_event_channel_state)
+        c.zone_states_changed.connect(self._on_zone_states)
+        c.detection_mode_changed.connect(self._apply_detection_mode)
+        c.regions_changed.connect(self._on_regions_changed)
         c.plc_state.connect(self._on_plc_state)
         c.plc_latency.connect(self.status_panel.set_plc_latency)
         c.plc_memory.connect(self.plc_cfg.set_memory)
@@ -369,6 +387,17 @@ class MainWindow(QMainWindow):
         cc.scan_requested.connect(c.scan_devices)
         cc.rtsp_test_requested.connect(c.rtsp_test)
         cc.video_command.connect(c.video_command)
+        cc.detection_mode_changed.connect(self._mode_selected_in_tab)
+        cc.ai_test_camera_requested.connect(c.test_ai_camera)
+        cc.ai_test_event_requested.connect(lambda: c.test_event_channel(6.0))
+
+        em = self.event_monitor
+        em.simulate_requested.connect(c.simulate_event)
+        em.region_changed.connect(c.update_region)
+        em.region_delete_requested.connect(c.delete_region)
+        em.regions_save_requested.connect(self._save_regions)
+        em.connect_requested.connect(c.event_channel_connect)
+        em.disconnect_requested.connect(c.event_channel_disconnect)
 
         # AI tab
         ac = self.ai_cfg
@@ -450,11 +479,21 @@ class MainWindow(QMainWindow):
         cfg.video.loop = True
         cfg.video.realtime = True
         cfg.video.start_paused = False
+        if cfg.is_ai_camera and cfg.ai_camera.provider_enum != EventProviderType.MOCK:
+            # A video file cannot send AI events, so the demo runs on simulated ones.
+            cfg.ai_camera.event_provider = EventProviderType.MOCK.value
+            cfg.ai_camera.rtsp_url = ""
+            log.info("Video demo: event provider switched to simulated events")
+            self._show_message("Video demo: event provider switched to 'Simulated events' - "
+                               "use the AI Event tab to inject person enter / exit")
         self.camera_cfg.set_config(cfg)
         self.ctrl.apply_camera_config(cfg)
+        self._apply_detection_mode(cfg.detection_mode)
 
         # 2 - ROI: without an include zone the area could never become OCCUPIED
-        if not [r for r in self.ctrl.roi_manager.include_rois() if r.enabled and r.is_valid()]:
+        #     (AI Camera mode has no PC side ROI - the camera owns the zones)
+        if not cfg.is_ai_camera and not [r for r in self.ctrl.roi_manager.include_rois()
+                                         if r.enabled and r.is_valid()]:
             roi = self.ctrl.roi_manager.create(RoiType.INCLUDE, DEMO_ROI_POINTS, name="Demo Zone")
             self.ctrl.save_rois()   # keep the zone (and the workflow step) in a finished state
             log.info("Video demo: created default zone %s (edit or delete it in tab 3 ROI)", roi.id)
@@ -487,7 +526,8 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(text, 10000)
 
     def _workflow_clicked(self, step: int) -> None:
-        self.tabs.setCurrentIndex(STEP_TO_TAB.get(step, TAB_STATUS))
+        mapping = STEP_TO_TAB_AI if self._ai_camera_mode else STEP_TO_TAB
+        self.tabs.setCurrentIndex(mapping.get(step, TAB_STATUS))
         if step == 4 and self.btn_start.isEnabled():
             self.btn_start.setFocus()
 
@@ -566,7 +606,7 @@ class MainWindow(QMainWindow):
         self._model_loaded = loaded
         self._model_error = msg if failed else ""
         self.ai_cfg.set_model_status(msg, loaded if (failed or loaded) else None)
-        if not self._detecting:
+        if not self._detecting and not self._ai_camera_mode:
             led = "busy" if loaded else ("error" if failed else "off")
             self.led_ai.set_state(led)
             self.status_panel.set_ai("MODEL LOADED" if loaded else ("LOAD FAILED" if failed else "STOPPED"), led)
@@ -576,7 +616,8 @@ class MainWindow(QMainWindow):
         self._detecting = running
         self.ai_cfg.set_detection_running(running)
         led = "ok" if running else ("busy" if self._model_loaded else "off")
-        self.led_ai.set_state(led)
+        if not self._ai_camera_mode:
+            self.led_ai.set_state(led)
         self.status_panel.set_ai("RUNNING" if running else ("MODEL LOADED" if self._model_loaded else "STOPPED"), led)
         self.video.set_display_mode("result" if running else "raw")
         if not running:
@@ -625,6 +666,80 @@ class MainWindow(QMainWindow):
             "edit": "Drag a vertex  ·  Shift+click an edge to insert  ·  right-click a vertex to remove  ·  Delete removes the ROI",
         }.get(mode, "Tip: draw a zone (step 3), then START SYSTEM"))
 
+    # ================================================================== AI camera mode
+    def _apply_detection_mode(self, mode_value: str) -> None:
+        """Re-label the parts of the UI whose meaning depends on the detection source."""
+        try:
+            mode = DetectionMode(mode_value)
+        except ValueError:
+            mode = DetectionMode.AI_CAMERA
+        ai = mode == DetectionMode.AI_CAMERA
+        self._ai_camera_mode = ai
+        self.status_panel.set_ai_camera_mode(ai)
+        self.status_panel.set_detection_mode("CAMERA AI" if ai else "PC AI / YOLO")
+        self.video.set_placeholder(PLACEHOLDER_AI_CAMERA if ai else PLACEHOLDER_YOLO)
+        self.tabs.setTabVisible(TAB_EVENT, ai)
+        self.tabs.setTabVisible(TAB_AI, not ai)
+        self.tabs.setTabVisible(TAB_ROI, not ai)
+        if ai:
+            self.workflow.set_step_title(1, "AI Events", "Kenh su kien AI cua camera (ISAPI / HTTP)")
+            self.workflow.set_step_title(2, "Regions", "Gan region id cua camera vao ten vung va bit PLC")
+        else:
+            self.workflow.set_step_title(1, "AI Model", "Nap model YOLO pretrained de phat hien person")
+            self.workflow.set_step_title(2, "ROI Zones", "Ve vung giam sat (polygon) tren hinh")
+        provider = self.ctrl.settings.camera.ai_camera.provider_enum
+        self.event_monitor.set_simulation_available(provider == EventProviderType.MOCK)
+        for btn in (self.btn_q_add, self.btn_q_ex, self.btn_q_finish, self.btn_q_edit, self.btn_q_save):
+            btn.setEnabled(not ai)
+            btn.setToolTip("Zones are configured inside the camera in AI Camera mode "
+                           "(see the AI Event tab)" if ai else btn.toolTip())
+        if ai:
+            self.lbl_video_hint.setText("AI Camera mode: the camera detects people and sends events. "
+                                        "Map its regions in the 'AI Event' tab.")
+        self.video.set_display_mode("raw" if ai else self.video._display_mode)
+        self._update_workflow()
+
+    def _mode_selected_in_tab(self, mode_value: str) -> None:
+        """The Camera tab combo changed: apply it straight away so the UI follows."""
+        try:
+            mode = DetectionMode(mode_value)
+        except ValueError:
+            return
+        if mode != self.ctrl.detection_mode:
+            self.ctrl.set_detection_mode(mode)
+        self._apply_detection_mode(mode_value)
+
+    def _on_camera_event(self, event: CameraEvent) -> None:
+        self.event_monitor.add_event(event)
+        if not event.type_enum.is_health:
+            self.status_panel.set_last_event(event.summary(), event.timestamp.strftime("%H:%M:%S"))
+
+    def _on_event_channel_state(self, state: str, message: str) -> None:
+        self._event_channel = state
+        self._event_message = message
+        self.event_monitor.set_channel_state(state, message)
+        led = {"ONLINE": "ok", "CONNECTING": "busy", "RECONNECTING": "warn",
+               "ERROR": "error", "DISABLED": "off"}.get(state, "error" if state == "DISCONNECTED" else "off")
+        self.status_panel.set_event_channel(state, led)
+        if self._ai_camera_mode:
+            self.led_ai.set_state(led)
+        self._update_workflow()
+
+    def _on_zone_states(self, states) -> None:
+        self.event_monitor.update_zone_states(states)
+        occupied = [rid for rid, st in states.items() if getattr(st, "occupied", False)]
+        counts = self.ctrl.event_state
+        self.status_panel.set_counts(counts.total_person_count(), len(occupied), 0,
+                                     counts.ignored_non_human, ", ".join(occupied))
+
+    def _on_regions_changed(self) -> None:
+        self.event_monitor.set_regions(self.ctrl.region_mapping.all(), self.ctrl.zone_states())
+        self._update_workflow()
+
+    def _save_regions(self) -> None:
+        self.ctrl.save_regions()
+        self.event_monitor.set_regions_dirty(False)
+
     # ================================================================== workflow bar
     def _update_workflow(self) -> None:
         # 1 - camera
@@ -638,6 +753,11 @@ class MainWindow(QMainWindow):
             CameraState.ERROR: ("error", "Connection error"),
         }.get(self._camera_state, ("todo", "Not connected"))
         self.workflow.set_step(0, *cam)
+
+        ai_mode = self._ai_camera_mode
+        if ai_mode:
+            self._update_workflow_ai_camera()
+            return
 
         # 2 - AI model
         if self._detecting:
@@ -661,15 +781,46 @@ class MainWindow(QMainWindow):
                    detail + (" · unsaved" if self.ctrl.roi_manager.dirty else ""))
         self.workflow.set_step(2, *roi)
 
-        # 4 - PLC
-        sim = self.ctrl.settings.plc.simulation_mode
-        if self._plc_connected:
-            plc = ("done", "Simulation (virtual PLC)" if sim else f"Connected {self.ctrl.settings.plc.connection.ip}")
-        else:
-            plc = ("error" if self.ctrl.running else "todo", "Not connected")
-        self.workflow.set_step(3, *plc)
+        self._update_workflow_plc()
 
         # 5 - run
+        run = {
+            "RUNNING": ("done", "Monitoring active"),
+            "FAULT": ("error", self._system_message or "Fault"),
+            "STARTING": ("active", "Starting..."),
+        }.get(self._system_state, ("todo", "Press START SYSTEM (F5)"))
+        self.workflow.set_step(4, *run)
+
+    def _update_workflow_plc(self) -> None:
+        sim = self.ctrl.settings.plc.simulation_mode
+        if self._plc_connected:
+            detail = "Simulation (virtual PLC)" if sim else f"Connected {self.ctrl.settings.plc.connection.ip}"
+            self.workflow.set_step(3, "done", detail)
+        else:
+            self.workflow.set_step(3, "error" if self.ctrl.running else "todo", "Not connected")
+
+    def _update_workflow_ai_camera(self) -> None:
+        """Steps 2 and 3 mean 'event channel' and 'region mapping' in AI Camera mode."""
+        channel = {
+            "ONLINE": ("done", "Receiving camera events"),
+            "CONNECTING": ("active", "Connecting..."),
+            "RECONNECTING": ("warn", self._event_message or "Reconnecting..."),
+            "ERROR": ("error", self._event_message or "Cannot open the event channel"),
+            "DISABLED": ("todo", "Not used"),
+        }.get(self._event_channel, ("todo", "Not connected"))
+        self.workflow.set_step(1, *channel)
+
+        mapped = [r for r in self.ctrl.region_mapping.all() if r.enabled and r.plc_device]
+        known = self.ctrl.region_mapping.all()
+        if not known:
+            regions = ("warn", "No camera region seen yet")
+        elif not mapped:
+            regions = ("warn", f"{len(known)} region(s), none mapped to a PLC device")
+        else:
+            regions = ("done", f"{len(mapped)} of {len(known)} region(s) mapped")
+        self.workflow.set_step(2, *regions)
+        self._update_workflow_plc()
+
         run = {
             "RUNNING": ("done", "Monitoring active"),
             "FAULT": ("error", self._system_message or "Fault"),

@@ -33,6 +33,15 @@ class EditorMode(str, Enum):
 VERTEX_TOL_PX = 9.0
 EDGE_TOL_PX = 7.0
 
+PLACEHOLDER_YOLO = (
+    "Step 1  -  open the 'Camera' tab, pick a source (USB / Video file / RTSP), then Connect + Start\n"
+    "Step 2  -  'YOLO' tab: Load Model        Step 3  -  'ROI' tab: draw the monitored zone\n"
+    "Step 4  -  'PLC' tab: Connect or keep Simulation        Step 5  -  press START SYSTEM (F5)")
+PLACEHOLDER_AI_CAMERA = (
+    "Step 1  -  'Camera' tab: IP, user and password of the AI camera, then Test Camera + Test Event\n"
+    "Step 2  -  'AI Event' tab: map each camera region to a PLC device\n"
+    "Step 3  -  'PLC' tab: Connect or keep Simulation        Step 4  -  press START SYSTEM (F5)")
+
 
 class VideoView(QWidget):
     roi_drawn = Signal(str, list)              # RoiType value, [(nx, ny), ...]
@@ -55,6 +64,7 @@ class VideoView(QWidget):
         self._area_text = ""
         self._area_color = COLOR_TEXT_DIM
         self._overlay_info = ""
+        self._placeholder = PLACEHOLDER_YOLO
         # editor
         self._mode = EditorMode.NONE
         self._draw_type = RoiType.INCLUDE
@@ -127,6 +137,11 @@ class VideoView(QWidget):
 
     def set_overlay_info(self, text: str) -> None:
         self._overlay_info = text
+        self._mark()
+
+    def set_placeholder(self, text: str) -> None:
+        """Guidance shown while there is no picture; it depends on the detection mode."""
+        self._placeholder = text
         self._mark()
 
     def _set_image(self, image) -> None:
@@ -437,11 +452,8 @@ class VideoView(QWidget):
         f2.setPointSize(10)
         p.setFont(f2)
         p.setPen(QColor(COLOR_TEXT_MUTED))
-        steps = ("Step 1  -  open the 'Camera' tab, pick a source (USB / Video file / RTSP), then Connect + Start\n"
-                 "Step 2  -  'AI' tab: Load Model        Step 3  -  'ROI' tab: draw the monitored zone\n"
-                 "Step 4  -  'PLC' tab: Connect or keep Simulation        Step 5  -  press START SYSTEM (F5)")
         p.drawText(QRectF(r.x(), r.y() + r.height() * 0.5, r.width(), r.height() * 0.5),
-                   Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop, steps)
+                   Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop, self._placeholder)
 
     def _paint_rois(self, p: QPainter) -> None:
         lw = max(1, int(self.vis.line_width))

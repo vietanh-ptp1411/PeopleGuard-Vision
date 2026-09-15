@@ -127,6 +127,7 @@ class SystemController(QObject):
         self._in_fault = False
         self._system_msg = ""
         self._start_detection_when_loaded = False
+        self._got_data_since_start = False
         # AI camera mode
         self._event_channel = EventChannelState.DISCONNECTED
         self._event_message = ""
@@ -451,6 +452,7 @@ class SystemController(QObject):
             self.message.emit("Warning: no INCLUDE ROI defined - the area will never be OCCUPIED")
         self._system_running = True
         self._start_time = time.monotonic()
+        self._got_data_since_start = False
         self._ai_error = ""
         log.info("SYSTEM START requested (%s)", self.detection_mode.label)
         self._log_event(EventType.SYSTEM_START,
@@ -714,7 +716,11 @@ class SystemController(QObject):
         if running:
             # Right after START the links may still be coming up: report STARTING (not FAULT)
             # unless a hard error is already known or the grace period is over.
-            in_grace = (not has_data) and (time.monotonic() - self._start_time) < STARTUP_GRACE_S
+            if has_data:
+                self._got_data_since_start = True
+            # the grace period is only for the very first start-up, never for a later loss
+            in_grace = (not self._got_data_since_start
+                        and (time.monotonic() - self._start_time) < STARTUP_GRACE_S)
             hard_error = self._camera_state in (CameraState.LOST, CameraState.ERROR, CameraState.FINISHED)
             hard_error = hard_error or (self._event_channel == EventChannelState.ERROR if ai_mode
                                         else bool(self._ai_error))
