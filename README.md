@@ -1,6 +1,15 @@
 # VisionGuard
 
-Ứng dụng desktop công nghiệp: **Camera → YOLO (person) → ROI polygon / exclusion zone → debounce → PLC Mitsubishi (MC Protocol 3E)**.
+Ứng dụng desktop công nghiệp phát hiện người trong vùng giám sát và báo trạng thái sang **PLC Mitsubishi
+(MC Protocol 3E)**. Hỗ trợ **hai chế độ phát hiện**, đổi qua lại ngay trong app:
+
+| Chế độ | Ai phát hiện người | Luồng |
+|---|---|---|
+| **AI Camera** (mặc định) | Camera AI tự phát hiện, tự có vùng giám sát | RTSP hiển thị hình + kênh sự kiện (ISAPI/HTTP) → VisionGuard → PLC |
+| **PC AI / YOLO** | Phần mềm chạy YOLO trên máy tính | Camera bất kỳ → YOLO → ROI polygon → debounce → PLC |
+
+Ở chế độ AI Camera phần mềm **không chạy YOLO**: camera lo phần nhận diện (Human Detection, Intrusion,
+Region Entrance/Exit), PC chỉ hiển thị hình, diễn giải sự kiện thành trạng thái vùng và điều khiển PLC.
 
 > ⚠️ **LƯU Ý AN TOÀN** – Đây là hệ thống *machine vision / monitoring*, **không phải** thiết bị bảo vệ đạt chuẩn an toàn
 > (safety-rated). Nếu dùng để bảo vệ người khỏi máy/robot nguy hiểm, hệ thống thực tế bắt buộc phải có safety PLC,
@@ -10,6 +19,32 @@
 ---
 
 ## 1. Tổng quan kiến trúc
+
+### Chế độ AI Camera (mặc định)
+
+```
+                         AI CAMERA (Hikvision / Dahua / generic)
+                                    │
+              ┌─────────────────────┴──────────────────────┐
+              │ RTSP video                                 │ AI event (ISAPI / HTTP)
+              ▼                                            ▼
+   RtspVideoReceiver  (CameraWorker thread)      CameraEventProvider (CameraEventWorker thread)
+              │ latest frame                                │ CameraEvent da chuan hoa
+              ▼                                            ▼
+            UI hien thi                        CameraEventStateMachine
+                                                 (human only, dem nguoi, debounce)
+                                                           │
+                                                           ▼
+                                               SystemController  →  PlcManager
+                                                                        │ MC Protocol 3E
+                                                                        ▼
+                                                              Mitsubishi PLC (M100/M101/...)
+```
+
+Ba kênh truyền thông **độc lập**: video, event và PLC tự kết nối lại riêng, UI hiển thị đúng trạng thái
+từng kênh. Mất kênh event → `FAULT`, **không bao giờ tự báo AREA CLEAR**.
+
+### Chế độ PC AI / YOLO (giữ nguyên từ bản trước)
 
 ```
  Camera Worker (QThread)        Inference Worker (QThread)              PLC Worker (QThread)
@@ -55,16 +90,28 @@ VisionGuard/
 │  │  └─ widgets/                  # video_view (ROI editor), workflow_bar (5 bước), status_panel, camera/ai/plc config, roi_panel, io_test, events, log
 │  ├─ camera/
 │  │  ├─ base_camera.py            # BaseCamera, Frame, CameraInfo
-│  │  ├─ camera_manager.py         # factory + scan + SDK availability
+│  │  ├─ camera_manager.py         # factory video theo detection mode + scan + SDK availability
 │  │  ├─ usb_camera.py  video_camera.py  rtsp_camera.py
+│  │  ├─ video/rtsp_receiver.py    # RtspVideoReceiver (video cua AI Camera mode)
+│  │  ├─ events/                   # AI CAMERA MODE
+│  │  │  ├─ camera_event.py        # CameraEvent + CameraEventType + TargetType
+│  │  │  ├─ base_event_provider.py # interface connect/start_listening/poll
+│  │  │  ├─ event_manager.py       # factory theo brand / provider
+│  │  │  ├─ hikvision/  isapi_client.py  event_parser.py  event_provider.py
+│  │  │  ├─ dahua/      dahua_event_provider.py
+│  │  │  ├─ mock/       mock_event_provider.py
+│  │  │  └─ generic_http_event_provider.py
 │  │  └─ industrial/ industrial_base.py  basler_camera.py  hikrobot_camera.py  genicam_camera.py
 │  ├─ vision/  detection.py  detector.py  yolo_detector.py
 │  ├─ roi/     geometry.py  roi_model.py  roi_manager.py  roi_processor.py
 │  ├─ logic/   debounce.py  occupancy_state_machine.py  pipeline.py
+│  │            camera_event_state_machine.py   # AI camera: event -> trang thai vung
 │  ├─ plc/     base_plc.py  device_address.py  simulated_plc.py  plc_manager.py
 │  │  └─ mitsubishi/ mc_protocol.py (3E Binary/ASCII frames)  mc_driver.py (TCP driver)
 │  ├─ workers/ frame_buffer.py  camera_worker.py  inference_worker.py  plc_worker.py
+│  │            camera_event_worker.py          # thread kenh su kien AI camera
 │  ├─ config/  schemas.py (dataclasses)  config_manager.py (JSON)
+│  │            region_mapping.py               # region id cua camera -> ten + device PLC
 │  ├─ storage/ event_repository.py (SQLite)  snapshot_saver.py
 │  └─ utils/   logger.py  performance.py  qt_image.py
 ├─ tools/mc_plc_simulator.py       # PLC Mitsubishi giả lập qua TCP (để test driver thật)
@@ -173,6 +220,82 @@ Làm theo đúng thứ tự 5 bước trên thanh workflow:
 Phím tắt: **F5** start, **F6** stop, **F9** test bằng video, **F11** fullscreen.
 
 Cửa sổ **mở toàn màn hình (maximized)** sẵn. Nhấn **F11** để chuyển sang fullscreen không viền (hợp cho màn hình HMI đặt tại máy), nhấn F11 lần nữa để quay lại. Kích thước tối thiểu 1195x629 nên chạy được trên mọi màn hình từ 1280x720 trở lên.
+
+## 4b. Chế độ AI Camera
+
+### Cấu hình camera
+
+Tab **1 Camera** → *Detection source* = **AI Camera** → chọn *Camera brand*. Trang **AI Camera** cần:
+
+| Trường | Ví dụ | Ghi chú |
+|---|---|---|
+| IP Address | `192.168.1.64` | IP camera |
+| HTTP Port | `80` | cổng ISAPI/HTTP |
+| RTSP Port | `554` | cổng video |
+| Username / Password | `admin` / … | tài khoản có quyền remote |
+| Stream channel | `101` | Hikvision: 101 main, 102 sub |
+| RTSP URL | (trống) | điền để ghi đè URL tự sinh |
+| Event provider | `Hikvision ISAPI alertStream` | hoặc Dahua / Generic / **Simulated** |
+| Event API path | (trống) | mặc định `/ISAPI/Event/notification/alertStream` |
+
+Ba nút kiểm tra: **Test Camera** (đọc deviceInfo, kiểm tra IP + mật khẩu), **Test RTSP** (mở thử luồng hình),
+**Test Event** (mở kênh sự kiện vài giây và báo lại camera gửi gì).
+
+### Bật AI trên camera Hikvision
+
+1. Web camera → *Configuration → Event → Smart Event* → bật **Intrusion Detection** (hoặc Region Entrance /
+   Region Exiting / Line Crossing), vẽ vùng, đặt **Region ID**.
+2. Trong *Target Detection* chọn **Human** (bỏ Vehicle) nếu camera hỗ trợ AcuSense.
+3. Tab **Linkage Method** → tick **Notify Surveillance Center** (bắt buộc, không có tick này camera sẽ không
+   đẩy event ra `alertStream`).
+4. Bấm **Test Event** trong VisionGuard rồi đi vào vùng để xác nhận.
+
+### Event được hiểu như thế nào
+
+| Camera gửi | VisionGuard hiểu | Tác động |
+|---|---|---|
+| `fielddetection` active / inactive | `INTRUSION_START` / `INTRUSION_END` | giữ vùng OCCUPIED tới khi có inactive |
+| `regionEntrance` | `REGION_ENTER` | +1 người trong vùng |
+| `regionExiting` | `REGION_EXIT` | −1 người, về 0 mới CLEAR |
+| `linedetection` | `LINE_CROSS` | xung, giữ OCCUPIED trong *Line cross hold* |
+| `humandetection` / AcuSense | `PERSON_DETECTED` / `PERSON_CLEARED` | như intrusion |
+| `videoloss` active | `CAMERA_ERROR` | cảnh báo kênh hình |
+| `VMD` (motion thường) | bỏ qua | motion không phân biệt người |
+
+**Chỉ mục tiêu HUMAN mới kích PLC.** Event có `targetType` là vehicle/animal/other bị bỏ (vẫn hiện trong
+Event Monitor để kiểm chứng). Nếu camera không báo target type thì mặc định vẫn nhận; bật *Only accept events
+with target = human* để siết chặt.
+
+Hai tham số quan trọng trong **EVENT LOGIC**:
+
+* **Clear timeout** (mặc định 5 s) – có camera không bao giờ gửi `inactive`. Nếu quá thời gian này không có
+  alarm mới thì nhả trạng thái presence. Không áp dụng cho bộ đếm người.
+* **Bộ đếm người** – thiếu một `REGION_EXIT` sẽ giữ vùng **OCCUPIED**, không bao giờ tự CLEAR sai.
+
+### Map vùng của camera sang PLC
+
+Tab **2 AI Event → Regions**. Region id mới xuất hiện tự động khi camera gửi event lần đầu.
+
+```json
+{ "regions": [
+    { "camera_region_id": "1", "name": "Robot Zone",   "plc_device": "M200", "enabled": true },
+    { "camera_region_id": "2", "name": "Loading Zone", "plc_device": "M201", "enabled": true } ] }
+```
+
+`M100` / `M101` / `D100` vẫn là trạng thái tổng của cả khu vực, `M200`/`M201` là bit riêng từng vùng.
+
+### Event Monitor và RAW EVENT
+
+Tab **2 AI Event** có 3 trang: **Event Monitor** (bảng sự kiện realtime kèm region, target, thời gian),
+**Regions** (map vùng), **RAW EVENT** (payload thô camera gửi). RAW EVENT rất quan trọng khi gặp model camera
+lạ vì mỗi hãng đặt tên event khác nhau. Mật khẩu không bao giờ được ghi ra log hay RAW EVENT.
+
+### Demo khi chưa có camera AI
+
+Đổi *Event provider* thành **Simulated events**, sang tab **2 AI Event** và bấm **Person Enter / Person Exit /
+Intrusion ON / OFF / Vehicle / Disconnect**. Toàn bộ chuỗi state machine → debounce → PLC chạy thật, chỉ có
+nguồn event là giả. Nút **TEST VIDEO** trong chế độ này cũng tự chuyển sang Simulated events và phát video
+file làm hình nền.
 
 ## 5. Camera
 
@@ -334,6 +457,7 @@ chạy được chỉ với webcam hoặc file video.
 | Có người trong include ROI (sau ON delay) | OCCUPIED | RUNNING | M100=1 M101=0 D100=1 (+ROI device) |
 | Người chỉ ở exclusion zone / ngoài ROI | CLEAR | RUNNING | M100=0 |
 | Camera mất / video hết | **FAULT** | FAULT | M104=1 M102=0 M101=0 D100=2, M100 giữ |
+| Mất kênh AI event (AI Camera mode) | **FAULT** | FAULT | M104=1 M103=0 D100=4, M100 giữ |
 | AI lỗi / không có kết quả > 3 s | **FAULT** | FAULT | M104=1 M103=0 D100=4 |
 | PLC mất kết nối | (giữ) | FAULT (PLC disconnected) | tự nối lại rồi ghi lại toàn bộ |
 | STOP SYSTEM | STOPPED | STOPPED | M103=0 M101=0 D100=5 |
@@ -378,6 +502,22 @@ chỉ ghi khi đổi, heartbeat), config round-trip.
 | 9 | PLC disconnect → UI không treo, báo PLC DISCONNECTED, tự nối lại | ✔ |
 | 10 | Video file thay camera – toàn bộ pipeline | ✔ |
 
+Chế độ **AI Camera** (chạy với mock provider + qua UI thật):
+
+| # | Kịch bản | Kết quả |
+|---|---|---|
+| 1 | Kênh event ONLINE, không alarm → AREA CLEAR, M100=OFF M101=ON | ✔ |
+| 2 | Camera báo người vào vùng → sau ON delay AREA OCCUPIED | ✔ |
+| 3 | PLC: M100=ON, M200=ON (Robot Zone), D100=1 | ✔ |
+| 4 | Hai người vào, một người ra → vẫn OCCUPIED (đếm người) | ✔ |
+| 5 | Người cuối rời vùng → sau OFF delay AREA CLEAR, M100=OFF | ✔ |
+| 6 | Event mục tiêu là **vehicle** → bỏ qua, M100 vẫn OFF | ✔ |
+| 7 | Hai vùng độc lập: M200 ↔ M201 không ảnh hưởng nhau | ✔ |
+| 8 | Mất kênh event → FAULT, M104=ON, M100 **giữ nguyên**, không CLEAR giả | ✔ |
+| 9 | Kênh event trở lại → hết FAULT | ✔ |
+| 10 | Đổi sang PC AI / YOLO rồi quay lại: kênh event tắt/bật đúng | ✔ |
+| 11 | Camera không tới được (IP sai) → worker vẫn sống, UI không treo | ✔ |
+
 ## 13. Troubleshooting
 
 | Vấn đề | Cách xử lý |
@@ -392,6 +532,11 @@ chỉ ghi khi đổi, heartbeat), config round-trip.
 | PLC `0xC059` / `0xC05C` | CPU không hỗ trợ lệnh; bit-unit lên word device; kiểm tra device tồn tại (M range, D range). |
 | PLC ghi được khi STOP nhưng không khi RUN | Bật *Enable online change (MC Protocol)* / permit write during RUN. |
 | Connect PLC timeout | Ping IP; cùng subnet; firewall Windows; port đúng SLMP connection; PLC đã reset sau khi write parameter. |
+| Test Event mở được nhưng im lặng | Camera chưa bật rule AI, hoặc chưa tick *Notify Surveillance Center*. Xem RAW EVENT để biết camera có gửi gì không. |
+| Event có nhưng không kích PLC | Kiểm tra cột *Target* trong Event Monitor: vehicle/animal bị bỏ theo thiết kế. Và region id đã map PLC device chưa. |
+| Vùng không bao giờ CLEAR | Camera không gửi `inactive`: giảm *Clear timeout*. Nếu dùng enter/exit mà thiếu một EXIT thì vùng giữ OCCUPIED (đúng thiết kế fail-safe). |
+| `401` khi Test Camera | Sai user/mật khẩu, hoặc tài khoản không có quyền remote. App tự thử digest rồi basic. |
+| `403` khi mở kênh event | Bật ISAPI / Open Platform trong camera và cấp quyền cho tài khoản. |
 | Basler/Hikrobot "SDK not installed" | Cài SDK + package Python tương ứng (mục 5.4), chạy lại app. |
 | Video hết → FAULT | Bật Loop hoặc Restart – hệ thống cố ý không báo CLEAR khi mất nguồn hình. |
 | ROI vẽ xong nhưng mất khi mở lại | Nhấn **Save ROI** (nút hiển thị `*` khi chưa lưu); khi đóng app cũng tự lưu. |
@@ -401,5 +546,7 @@ chỉ ghi khi đổi, heartbeat), config round-trip.
 * **Phase 1 (done)**: PySide6 UI (light industrial theme + thanh 5 bước), USB/Video/RTSP, YOLO person, polygon ROI + exclusion, foot-point logic, debounce/state
   machine, PLC simulation, MC Protocol 3E Binary/ASCII, M100/M101/…/D100, heartbeat, fail-safe, log, config JSON, SQLite
   event, snapshot, I/O test, multiple ROI + per-ROI device, tracking (ByteTrack, cần `lap`).
-* **Phase 2**: kiểm thử adapter Basler / Hikrobot / GenICam với thiết bị thật, ONVIF discovery, thống kê.
+* **AI Camera mode (done)**: RTSP video, Hikvision ISAPI alertStream, chuẩn hoá event, lọc human,
+  đếm người, debounce, map region → PLC, Event Monitor + RAW EVENT, simulation, fail-safe từng kênh.
+* **Phase 2**: kiểm thử adapter Basler / Hikrobot / GenICam và camera Hikvision/Dahua thật, ONVIF discovery, thống kê.
 * **Phase 3**: Modbus TCP / Siemens S7 / OPC UA / EtherNet/IP (kế thừa `BasePLC`), đa camera, report.
