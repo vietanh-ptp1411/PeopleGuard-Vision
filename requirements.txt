@@ -1,7 +1,9 @@
-# PeopleGuard Vision - core dependencies (Python 3.11+)
+# VisionGuard - core dependencies (Python 3.11+)
 PySide6>=6.6
 opencv-python>=4.8
 numpy>=1.24
 ultralytics>=8.3
+# AI Camera mode: HTTP / ISAPI event channel (also pulled in by ultralytics)
+requests>=2.28
 # torch/torchvision duoc ultralytics keo theo; cai ban CUDA rieng neu can GPU:
 #   https://pytorch.org/get-started/locally/
