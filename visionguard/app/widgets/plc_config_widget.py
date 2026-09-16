@@ -1,5 +1,9 @@
-"""PLC tab: Mitsubishi MC Protocol connection, device mapping, signal mode, heartbeat, fail-safe,
-simulation toggle and the Virtual PLC memory table."""
+"""PLC tab: connection, device mapping, manual I/O and the memory view, as four small pages.
+
+The old single page was 1760 px tall in a 460 px panel. Split into inner tabs, and with the
+commissioning parameters (frame code, network numbers, fail-safe wording) behind an Advanced
+checkbox, each page now fits without scrolling.
+"""
 from __future__ import annotations
 
 from copy import deepcopy
@@ -8,14 +12,35 @@ from typing import Dict
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QDoubleSpinBox, QFormLayout, QGridLayout, QGroupBox, QHBoxLayout,
-                               QLabel, QLineEdit, QPushButton, QScrollArea, QSpinBox, QTableWidget, QTableWidgetItem,
-                               QVBoxLayout, QWidget)
+                               QHeaderView, QLabel, QLineEdit, QPushButton, QScrollArea, QSpinBox, QTableWidget,
+                               QTableWidgetItem, QTabWidget, QVBoxLayout, QWidget)
 
 from ...config.schemas import FaultPersonOutput, FrameFormat, PlcConfig, SignalMode
 from ...plc.device_address import is_valid_device
 from ..theme import COLOR_ERROR, COLOR_OK, COLOR_TEXT_DIM
+from .form_helpers import AdvancedSection, advanced_checkbox, hint
+from .io_test_widget import IoTestWidget
 
 PLC_SERIES = ["iQ-F (FX5U)", "iQ-R", "Q Series", "L Series", "Other MC 3E"]
+
+
+def _page(scrollable: bool = True):
+    """A tab page whose content scrolls if the window gets small."""
+    page = QWidget()
+    outer = QVBoxLayout(page)
+    outer.setContentsMargins(0, 0, 0, 0)
+    if not scrollable:
+        return page, outer
+    scroll = QScrollArea()
+    scroll.setWidgetResizable(True)
+    scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+    outer.addWidget(scroll)
+    body = QWidget()
+    scroll.setWidget(body)
+    lay = QVBoxLayout(body)
+    lay.setContentsMargins(6, 6, 6, 6)
+    lay.setSpacing(8)
+    return page, lay
 
 
 class PlcConfigWidget(QWidget):
@@ -28,23 +53,47 @@ class PlcConfigWidget(QWidget):
     def __init__(self, config: PlcConfig, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._config = deepcopy(config)
+        self.advanced = AdvancedSection()
+        self.io_test = IoTestWidget(config.mapping)
         self._build()
         self.set_config(config)
 
-    # ------------------------------------------------------------------ build
+    # ================================================================== build
     def _build(self) -> None:
-        outer = QVBoxLayout(self)
-        outer.setContentsMargins(0, 0, 0, 0)
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
-        outer.addWidget(scroll)
-        body = QWidget()
-        scroll.setWidget(body)
-        lay = QVBoxLayout(body)
-        lay.setSpacing(8)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(6)
 
-        # simulation
+        head = QHBoxLayout()
+        self.chk_advanced = advanced_checkbox(self.advanced)
+        head.addWidget(self.chk_advanced)
+        head.addStretch(1)
+        self.btn_apply = QPushButton("Apply && Save")
+        self.btn_apply.setProperty("class", "primary")
+        self.btn_apply.setProperty("size", "sm")
+        head.addWidget(self.btn_apply)
+        lay.addLayout(head)
+
+        self.tabs = QTabWidget()
+        self.tabs.addTab(self._build_connection(), "Connection")
+        self.tabs.addTab(self._build_devices(), "Devices")
+        self.tabs.addTab(self.io_test, "Manual I/O")
+        self.tabs.addTab(self._build_memory(), "Memory")
+        lay.addWidget(self.tabs, 1)
+
+        self.btn_apply.clicked.connect(self._apply)
+        self.btn_connect.clicked.connect(lambda: (self._apply(), self.connect_requested.emit()))
+        self.btn_disconnect.clicked.connect(self.disconnect_requested)
+        self.btn_test.clicked.connect(lambda: (self._apply(), self.test_requested.emit()))
+        for combo in self.findChildren(QComboBox):
+            combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+            combo.setMinimumContentsLength(12)
+        self.advanced.set_visible(False)
+
+    # ------------------------------------------------------------------ connection page
+    def _build_connection(self) -> QWidget:
+        page, lay = _page()
+
         g_sim = QGroupBox("MODE")
         ls = QVBoxLayout(g_sim)
         self.btn_sim = QPushButton("SIMULATE PLC (no hardware)")
@@ -54,32 +103,25 @@ class PlcConfigWidget(QWidget):
         ls.addWidget(self.btn_sim)
         self.lbl_sim = QLabel("")
         self.lbl_sim.setWordWrap(True)
-        self.lbl_sim.setStyleSheet(f"color: {COLOR_TEXT_DIM}; font-size: 9pt;")
+        self.lbl_sim.setProperty("class", "hint")
         ls.addWidget(self.lbl_sim)
         lay.addWidget(g_sim)
 
-        # connection
-        g_conn = QGroupBox("MC PROTOCOL CONNECTION")
+        g_conn = QGroupBox("MITSUBISHI MC PROTOCOL")
         f = QFormLayout(g_conn)
-        self.lbl_type = QLabel("Mitsubishi MC / SLMP")
-        f.addRow("PLC Type", self.lbl_type)
-        self.cmb_series = QComboBox()
-        self.cmb_series.addItems(PLC_SERIES)
-        f.addRow("PLC Series", self.cmb_series)
         self.edt_ip = QLineEdit()
+        self.edt_ip.setPlaceholderText("192.168.1.10")
         self.spn_port = QSpinBox()
         self.spn_port.setRange(1, 65535)
         f.addRow("IP Address", self.edt_ip)
         f.addRow("Port", self.spn_port)
-        self.cmb_frame = QComboBox()
-        self.cmb_frame.addItems(["3E"])
+        f.addRow(hint("IP và port của SLMP connection khai trong GX Works. Mặc định 5000."))
+
+        self.cmb_series = QComboBox()
+        self.cmb_series.addItems(PLC_SERIES)
         self.cmb_format = QComboBox()
         for ff in FrameFormat:
             self.cmb_format.addItem(ff.value.capitalize(), ff.value)
-        row = QHBoxLayout()
-        row.addWidget(self.cmb_frame)
-        row.addWidget(self.cmb_format)
-        f.addRow("Frame / Code", row)
         self.spn_net = QSpinBox()
         self.spn_net.setRange(0, 255)
         self.spn_pc = QSpinBox()
@@ -90,128 +132,143 @@ class PlcConfigWidget(QWidget):
         self.spn_io.setPrefix("0x")
         self.spn_station = QSpinBox()
         self.spn_station.setRange(0, 255)
-        f.addRow("Network No.", self.spn_net)
-        f.addRow("PC No.", self.spn_pc)
-        f.addRow("Dest. Module I/O", self.spn_io)
-        f.addRow("Dest. Module Station", self.spn_station)
         self.spn_timeout = QDoubleSpinBox()
         self.spn_timeout.setRange(0.2, 30.0)
         self.spn_timeout.setSuffix(" s")
         self.spn_retry = QSpinBox()
         self.spn_retry.setRange(0, 10)
-        self.chk_auto_reconnect = QCheckBox("Auto reconnect")
+        self.chk_auto_reconnect = QCheckBox("Tự động kết nối lại")
+        f.addRow("PLC Series", self.cmb_series)
+        f.addRow("Data code", self.cmb_format)
+        f.addRow("Network No.", self.spn_net)
+        f.addRow("PC No.", self.spn_pc)
+        f.addRow("Dest. Module I/O", self.spn_io)
+        f.addRow("Dest. Module Station", self.spn_station)
         f.addRow("Timeout", self.spn_timeout)
         f.addRow("Retry count", self.spn_retry)
-        f.addRow(self.chk_auto_reconnect)
+        f.addRow("", self.chk_auto_reconnect)
+        self.advanced.rows(f, self.cmb_series, self.cmb_format, self.spn_net, self.spn_pc, self.spn_io,
+                           self.spn_station, self.spn_timeout, self.spn_retry, self.chk_auto_reconnect)
+        self.lbl_code_hint = hint("Data code phải trùng với 'Communication Data Code' trong GX Works, "
+                                  "sai sẽ báo lỗi 0xC050.")
+        f.addRow(self.lbl_code_hint)
+        self.advanced.row(f, self.lbl_code_hint)
         lay.addWidget(g_conn)
 
-        # mapping
-        g_map = QGroupBox("DEVICE MAPPING")
+        g_ctl = QGroupBox("CONNECTION")
+        gl = QGridLayout(g_ctl)
+        self.btn_connect = QPushButton("Connect")
+        self.btn_disconnect = QPushButton("Disconnect")
+        self.btn_test = QPushButton("Test Connection")
+        gl.addWidget(self.btn_connect, 0, 0)
+        gl.addWidget(self.btn_disconnect, 0, 1)
+        gl.addWidget(self.btn_test, 1, 0, 1, 2)
+        self.lbl_status = QLabel("")
+        self.lbl_status.setWordWrap(True)
+        gl.addWidget(self.lbl_status, 2, 0, 1, 2)
+        lay.addWidget(g_ctl)
+        lay.addStretch(1)
+        return page
+
+    # ------------------------------------------------------------------ devices page
+    def _build_devices(self) -> QWidget:
+        page, lay = _page()
+
+        g_map = QGroupBox("PLC DEVICES")
         fm = QFormLayout(g_map)
-        self.cmb_signal = QComboBox()
-        self.cmb_signal.addItem("Mode A - single bit (PERSON)", SignalMode.SINGLE_BIT.value)
-        self.cmb_signal.addItem("Mode B - PERSON bit + CLEAR bit", SignalMode.DUAL_BIT.value)
-        fm.addRow("Signal mode", self.cmb_signal)
         self.edt_person = QLineEdit()
         self.edt_clear = QLineEdit()
+        fm.addRow("Có người (PERSON)", self.edt_person)
+        fm.addRow("Hết người (CLEAR)", self.edt_clear)
+        fm.addRow(hint("Hai bit chính gửi sang PLC. Có người: PERSON = ON, CLEAR = OFF."))
+
+        self.cmb_signal = QComboBox()
+        self.cmb_signal.addItem("Mode A - chỉ 1 bit PERSON", SignalMode.SINGLE_BIT.value)
+        self.cmb_signal.addItem("Mode B - PERSON + CLEAR", SignalMode.DUAL_BIT.value)
         self.edt_camera = QLineEdit()
         self.edt_ai = QLineEdit()
         self.edt_fault = QLineEdit()
         self.edt_hb = QLineEdit()
         self.edt_word = QLineEdit()
-        fm.addRow("Device Person / Occupied", self.edt_person)
-        fm.addRow("Device Area Clear", self.edt_clear)
-        fm.addRow("Device Camera OK", self.edt_camera)
-        fm.addRow("Device AI Running", self.edt_ai)
-        fm.addRow("Device System Fault", self.edt_fault)
-        fm.addRow("Heartbeat Device", self.edt_hb)
-        self.chk_word = QCheckBox("Write status word")
-        fm.addRow(self.chk_word)
-        fm.addRow("Status word device", self.edt_word)
-        lbl_codes = QLabel("0 = CLEAR   1 = OCCUPIED   2 = CAMERA ERROR   3 = PLC ERROR   4 = AI ERROR   5 = STOPPED")
-        lbl_codes.setWordWrap(True)
-        lbl_codes.setProperty("class", "hint")
-        fm.addRow(lbl_codes)
-        self.chk_roi_devices = QCheckBox("Write per-ROI devices")
-        fm.addRow(self.chk_roi_devices)
-        for e in (self.edt_person, self.edt_clear, self.edt_camera, self.edt_ai, self.edt_fault, self.edt_hb, self.edt_word):
-            e.textChanged.connect(self._validate_devices)
+        self.chk_word = QCheckBox("Ghi status word")
+        self.chk_roi_devices = QCheckBox("Ghi thêm bit riêng của từng vùng")
+        fm.addRow("Signal mode", self.cmb_signal)
+        fm.addRow("Camera OK", self.edt_camera)
+        fm.addRow("AI Running", self.edt_ai)
+        fm.addRow("System Fault", self.edt_fault)
+        fm.addRow("Heartbeat", self.edt_hb)
+        fm.addRow("", self.chk_word)
+        fm.addRow("Status word", self.edt_word)
+        fm.addRow("", self.chk_roi_devices)
+        self.advanced.rows(fm, self.cmb_signal, self.edt_camera, self.edt_ai, self.edt_fault, self.edt_hb,
+                           self.chk_word, self.edt_word, self.chk_roi_devices)
+        self.lbl_word_hint = hint("Status word: 0 CLEAR, 1 OCCUPIED, 2 CAMERA ERROR, 3 PLC ERROR, "
+                                  "4 AI ERROR, 5 STOPPED.")
+        fm.addRow(self.lbl_word_hint)
+        self.advanced.row(fm, self.lbl_word_hint)
         lay.addWidget(g_map)
 
-        # heartbeat + failsafe
         g_hb = QGroupBox("HEARTBEAT & FAIL-SAFE")
         fh = QFormLayout(g_hb)
-        self.chk_hb = QCheckBox("Heartbeat enabled")
+        self.chk_hb = QCheckBox("Bật heartbeat (bit đảo 0/1)")
         self.spn_hb = QSpinBox()
         self.spn_hb.setRange(100, 60000)
         self.spn_hb.setSuffix(" ms")
         self.spn_hb.setSingleStep(100)
-        fh.addRow(self.chk_hb)
-        fh.addRow("Heartbeat interval", self.spn_hb)
         self.cmb_fault_person = QComboBox()
-        self.cmb_fault_person.addItem("Hold last value (never fake CLEAR)", FaultPersonOutput.HOLD.value)
-        self.cmb_fault_person.addItem("Force ON (treat as occupied)", FaultPersonOutput.ON.value)
-        self.cmb_fault_person.addItem("Force OFF (PLC evaluates FAULT bit)", FaultPersonOutput.OFF.value)
-        fh.addRow("PERSON bit on FAULT", self.cmb_fault_person)
-        self.chk_clear_off = QCheckBox("CLEAR bit OFF on FAULT")
-        fh.addRow(self.chk_clear_off)
+        self.cmb_fault_person.addItem("Giữ nguyên giá trị cuối", FaultPersonOutput.HOLD.value)
+        self.cmb_fault_person.addItem("Ép ON (coi như có người)", FaultPersonOutput.ON.value)
+        self.cmb_fault_person.addItem("Ép OFF (PLC tự đọc bit FAULT)", FaultPersonOutput.OFF.value)
+        self.chk_clear_off = QCheckBox("Ép bit CLEAR = OFF khi FAULT")
+        fh.addRow("", self.chk_hb)
+        fh.addRow("Chu kỳ heartbeat", self.spn_hb)
+        fh.addRow("Bit PERSON khi FAULT", self.cmb_fault_person)
+        fh.addRow("", self.chk_clear_off)
+        fh.addRow(hint("Khi mất camera hoặc mất kênh sự kiện, phần mềm không bao giờ tự báo HẾT NGƯỜI."))
+        self.advanced.widget(g_hb)
         lay.addWidget(g_hb)
 
-        # control
-        g_ctl = QGroupBox("PLC CONTROL")
-        gl = QGridLayout(g_ctl)
-        self.btn_apply = QPushButton("Apply && Save")
-        self.btn_apply.setProperty("class", "primary")
-        self.btn_connect = QPushButton("Connect")
-        self.btn_disconnect = QPushButton("Disconnect")
-        self.btn_test = QPushButton("Test Connection")
-        gl.addWidget(self.btn_apply, 0, 0, 1, 2)
-        gl.addWidget(self.btn_connect, 1, 0)
-        gl.addWidget(self.btn_disconnect, 1, 1)
-        gl.addWidget(self.btn_test, 2, 0, 1, 2)
-        self.lbl_status = QLabel("")
-        self.lbl_status.setWordWrap(True)
-        gl.addWidget(self.lbl_status, 3, 0, 1, 2)
-        lay.addWidget(g_ctl)
+        for e in (self.edt_person, self.edt_clear, self.edt_camera, self.edt_ai, self.edt_fault,
+                  self.edt_hb, self.edt_word):
+            e.setPlaceholderText("M100")
+            e.textChanged.connect(self._validate_devices)
+        lay.addStretch(1)
+        return page
 
-        # virtual memory
-        g_mem = QGroupBox("PLC MEMORY")
-        lm = QVBoxLayout(g_mem)
-        lbl_mem = QLabel("Virtual memory in simulation mode, last written values with a real PLC.")
-        lbl_mem.setWordWrap(True)
-        lbl_mem.setProperty("class", "hint")
-        lm.addWidget(lbl_mem)
+    # ------------------------------------------------------------------ memory page
+    def _build_memory(self) -> QWidget:
+        page, lay = _page(scrollable=False)
+        lay.setContentsMargins(6, 6, 6, 6)
+        lay.setSpacing(6)
+        lay.addWidget(hint("Bộ nhớ ảo khi chạy simulation, hoặc giá trị ghi gần nhất khi dùng PLC thật."))
         self.tbl_mem = QTableWidget(0, 3)
         self.tbl_mem.setHorizontalHeaderLabels(["Device", "Value", "Meaning"])
-        self.tbl_mem.horizontalHeader().setStretchLastSection(True)
+        header = self.tbl_mem.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
         self.tbl_mem.verticalHeader().setVisible(False)
         self.tbl_mem.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        self.tbl_mem.setMinimumHeight(180)
-        lm.addWidget(self.tbl_mem)
-        lay.addWidget(g_mem)
-        lay.addStretch(1)
+        lay.addWidget(self.tbl_mem, 1)
+        return page
 
-        for combo in self.findChildren(QComboBox):
-            combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
-            combo.setMinimumContentsLength(6)
-
-        self.btn_apply.clicked.connect(self._apply)
-        self.btn_connect.clicked.connect(lambda: (self._apply(), self.connect_requested.emit()))
-        self.btn_disconnect.clicked.connect(self.disconnect_requested)
-        self.btn_test.clicked.connect(lambda: (self._apply(), self.test_requested.emit()))
-
-    # ------------------------------------------------------------------ handlers
+    # ================================================================== handlers
     def _sim_toggled(self, on: bool) -> None:
-        self.btn_sim.setText("SIMULATION MODE: ON  (virtual PLC)" if on else "SIMULATE PLC (no hardware)")
-        self.lbl_sim.setText("No real PLC is contacted. Writes go to the virtual memory table below."
-                             if on else "Real Mitsubishi PLC via MC Protocol 3E over TCP.")
-        for w in (self.edt_ip, self.spn_port, self.cmb_format, self.spn_net, self.spn_pc, self.spn_io, self.spn_station,
-                  self.spn_timeout, self.spn_retry, self.chk_auto_reconnect, self.cmb_series):
-            w.setEnabled(not on)
+        self._sim_toggled_silent(on)
         self.simulation_toggled.emit(on)
 
+    def _sim_toggled_silent(self, on: bool) -> None:
+        self.btn_sim.setText("SIMULATION MODE: ON  (virtual PLC)" if on else "SIMULATE PLC (no hardware)")
+        self.lbl_sim.setText("Không kết nối PLC thật. Mọi lệnh ghi vào bộ nhớ ảo ở tab Memory."
+                             if on else "Kết nối PLC Mitsubishi thật qua MC Protocol 3E / TCP.")
+        for w in (self.edt_ip, self.spn_port, self.cmb_format, self.spn_net, self.spn_pc, self.spn_io,
+                  self.spn_station, self.spn_timeout, self.spn_retry, self.chk_auto_reconnect,
+                  self.cmb_series, self.btn_test):
+            w.setEnabled(not on)
+
     def _validate_devices(self) -> None:
-        for e in (self.edt_person, self.edt_clear, self.edt_camera, self.edt_ai, self.edt_fault, self.edt_hb, self.edt_word):
+        for e in (self.edt_person, self.edt_clear, self.edt_camera, self.edt_ai, self.edt_fault,
+                  self.edt_hb, self.edt_word):
             txt = e.text().strip()
             ok = (not txt) or is_valid_device(txt)
             e.setStyleSheet("" if ok else f"border: 1px solid {COLOR_ERROR};")
@@ -231,26 +288,27 @@ class PlcConfigWidget(QWidget):
 
     def set_memory(self, mem: Dict[str, int]) -> None:
         meanings = self._meanings()
+        bit_devices = ("M", "X", "Y", "B", "L", "F", "S", "V")
         self.tbl_mem.setRowCount(len(mem))
         for row, (dev, val) in enumerate(mem.items()):
-            it_dev = QTableWidgetItem(dev)
-            it_val = QTableWidgetItem("ON" if (dev[0] in "MXYBLFSV" and not dev.startswith(("SD", "SW", "SN")) and val in (0, 1)) and val == 1
-                                      else ("OFF" if dev[0] in "MXYBLFSV" and not dev.startswith(("SD", "SW", "SN")) and val == 0 else str(val)))
+            is_bit = dev[:1] in bit_devices and not dev.startswith(("SD", "SW", "SN"))
+            text = ("ON" if val else "OFF") if (is_bit and val in (0, 1)) else str(val)
+            it_val = QTableWidgetItem(text)
             it_val.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             if val:
-                it_val.setForeground(QColor(COLOR_ERROR if dev == self._config.mapping.device_person else COLOR_OK))
+                it_val.setForeground(QColor(COLOR_ERROR if dev == self._config.mapping.device_person
+                                            else COLOR_OK))
             else:
                 it_val.setForeground(QColor(COLOR_TEXT_DIM))
-            it_mean = QTableWidgetItem(meanings.get(dev, ""))
-            self.tbl_mem.setItem(row, 0, it_dev)
+            self.tbl_mem.setItem(row, 0, QTableWidgetItem(dev))
             self.tbl_mem.setItem(row, 1, it_val)
-            self.tbl_mem.setItem(row, 2, it_mean)
+            self.tbl_mem.setItem(row, 2, QTableWidgetItem(meanings.get(dev, "")))
 
     def _meanings(self) -> Dict[str, str]:
         m = self._config.mapping
         return {
-            m.device_person: "PERSON PRESENT / AREA OCCUPIED",
-            m.device_clear: "AREA CLEAR",
+            m.device_person: "CO NGUOI / AREA OCCUPIED",
+            m.device_clear: "HET NGUOI / AREA CLEAR",
             m.device_camera_ok: "Camera connected",
             m.device_ai_running: "AI running",
             m.device_fault: "System fault",
@@ -258,7 +316,7 @@ class PlcConfigWidget(QWidget):
             m.device_status_word: "Status word",
         }
 
-    # ------------------------------------------------------------------ config <-> widgets
+    # ================================================================== config <-> widgets
     def set_config(self, cfg: PlcConfig) -> None:
         self._config = deepcopy(cfg)
         c = cfg.connection
@@ -295,14 +353,8 @@ class PlcConfigWidget(QWidget):
         self.btn_sim.setChecked(cfg.simulation_mode)
         self.btn_sim.blockSignals(False)
         self._sim_toggled_silent(cfg.simulation_mode)
-
-    def _sim_toggled_silent(self, on: bool) -> None:
-        self.btn_sim.setText("SIMULATION MODE: ON  (virtual PLC)" if on else "SIMULATE PLC (no hardware)")
-        self.lbl_sim.setText("No real PLC is contacted. Writes go to the virtual memory table below."
-                             if on else "Real Mitsubishi PLC via MC Protocol 3E over TCP.")
-        for w in (self.edt_ip, self.spn_port, self.cmb_format, self.spn_net, self.spn_pc, self.spn_io, self.spn_station,
-                  self.spn_timeout, self.spn_retry, self.chk_auto_reconnect, self.cmb_series):
-            w.setEnabled(not on)
+        self.io_test.set_mapping(cfg.mapping)
+        self.advanced.apply()
 
     def get_config(self) -> PlcConfig:
         cfg = deepcopy(self._config)
@@ -339,4 +391,5 @@ class PlcConfigWidget(QWidget):
 
     def _apply(self) -> None:
         self._config = self.get_config()
+        self.io_test.set_mapping(self._config.mapping)
         self.config_applied.emit(deepcopy(self._config))

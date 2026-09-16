@@ -171,13 +171,26 @@ Giao diện sáng (light industrial), bố cục cố định:
 ```
  toolbar    START SYSTEM | STOP SYSTEM | TEST VIDEO | PLC SIMULATION | AREA BANNER | LED x4 | dong ho
  workflow   (1) Camera  >  (2) AI Model  >  (3) ROI Zones  >  (4) PLC  >  (5) Run
- trai       hinh camera + ROI editor          |  phai   tab Status / 1 Camera / 2 AI / 3 ROI / 4 PLC / I/O / Events
+ trái       hình camera + ROI editor        |  phải   tab Status / 1 Camera / 2 AI Event / 3 PLC / History
  quick bar  CAMERA: Connect Start Stop  |  ROI: +ROI  +Exclusion  Finish  Edit  Save ROI
  duoi       SYSTEM LOG (auto scroll)           |  status bar: thong bao + canh bao an toan
 ```
 
 Lăn chuột trên trang cấu hình chỉ cuộn trang, **không làm đổi giá trị** của ô số hay danh sách
 (muốn đổi thì bấm vào ô trước). Đây là lỗi hay gặp làm sai port camera mà không ai biết.
+
+### Rút gọn tham số
+
+Mỗi trang cấu hình chỉ hiện những ô thật sự cần, kèm dòng giải thích tiếng Việt:
+
+| Tab | Hiện mặc định | Nằm sau ô **Advanced settings** |
+|---|---|---|
+| 1 Camera (AI Camera) | Detection source, Camera brand, IP, Username, Password, Event provider, ON/OFF delay | cổng HTTP/RTSP, HTTPS, kênh stream, RTSP URL, transport, event API path, timeout, health check, clear timeout, line cross hold, đếm người, strict human, 2 lựa chọn fail-safe, auto reconnect |
+| 3 PLC | nút Simulation, IP, Port, thiết bị PERSON và CLEAR | PLC series, data code, network/PC/module number, timeout, retry, auto reconnect, signal mode, các bit phụ, status word, heartbeat, fail-safe |
+| 2 AI Model (YOLO) | Model path, Confidence, Device, containment mode, ON/OFF delay | IoU, image size, tracking, FP16, auto load, intersection threshold, min frames |
+
+Tab **PLC** chia thành 4 trang con: *Connection*, *Devices*, *Manual I/O*, *Memory*. Màn hình I/O test
+trước đây là một tab riêng, nay nằm trong PLC vì nó chính là kiểm tra PLC.
 
 **Thanh 5 bước** ngay dưới toolbar là phần quan trọng nhất khi thao tác: mỗi bước hiện trạng thái
 (`xám` = chưa làm, `xanh dương` = đang làm, `xanh lá ✓` = xong, `vàng/đỏ` = thiếu hoặc lỗi) kèm mô tả

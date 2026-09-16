@@ -40,7 +40,6 @@ from .widgets.ai_config_widget import AIConfigWidget
 from .widgets.camera_config_widget import CameraConfigWidget
 from .widgets.event_monitor_widget import EventMonitorWidget
 from .widgets.events_widget import EventsWidget
-from .widgets.io_test_widget import IoTestWidget
 from .widgets.led_indicator import LedIndicator
 from .widgets.log_widget import LogWidget
 from .widgets.plc_config_widget import PlcConfigWidget
@@ -55,7 +54,7 @@ SAFETY_NOTE_SHORT = "NOT a safety-rated protective device - monitoring only"
 SAFETY_NOTE = ("Monitoring system only - NOT a safety-rated protective device. "
                "Use certified safety PLC / sensors for personnel protection.")
 
-TAB_STATUS, TAB_CAMERA, TAB_EVENT, TAB_AI, TAB_ROI, TAB_PLC, TAB_IO, TAB_EVENTS = range(8)
+TAB_STATUS, TAB_CAMERA, TAB_EVENT, TAB_AI, TAB_ROI, TAB_PLC, TAB_HISTORY = range(7)
 #: zone created automatically by the video demo when the user has not drawn one yet
 DEMO_ROI_POINTS = [(0.08, 0.08), (0.92, 0.08), (0.92, 0.92), (0.08, 0.92)]
 STEP_TO_TAB = {0: TAB_CAMERA, 1: TAB_AI, 2: TAB_ROI, 3: TAB_PLC, 4: TAB_STATUS}
@@ -115,7 +114,6 @@ class MainWindow(QMainWindow):
         self.ai_cfg = AIConfigWidget(s.ai)
         self.plc_cfg = PlcConfigWidget(s.plc)
         self.roi_panel = RoiPanel()
-        self.io_test = IoTestWidget(s.plc.mapping)
         self.events_widget = EventsWidget()
         self.event_monitor = EventMonitorWidget()
         self.log_widget = LogWidget()
@@ -146,19 +144,19 @@ class MainWindow(QMainWindow):
         tb.setFloatable(False)
         self.addToolBar(tb)
 
-        self.btn_start = _button("▶  START SYSTEM", "success", "xl", "Bat dau giam sat (F5)")
-        self.btn_stop = _button("■  STOP SYSTEM", "danger", "xl", "Dung giam sat (F6)")
+        self.btn_start = _button("▶  START SYSTEM", "success", "xl", "Bắt đầu giám sát (F5)")
+        self.btn_stop = _button("■  STOP SYSTEM", "danger", "xl", "Dừng giám sát (F6)")
         self.btn_stop.setEnabled(False)
         tb.addWidget(self.btn_start)
         tb.addWidget(self.btn_stop)
         tb.addSeparator()
 
         self.btn_demo = _button("▶  TEST VIDEO", "primary", "",
-                                "Chon 1 file video va chay thu ca he thong: camera + AI + ROI + PLC mo phong (F9)")
+                                "Chọn 1 file video và chạy thử cả hệ thống: camera + AI + ROI + PLC mô phỏng (F9)")
         self.btn_demo.setMinimumHeight(34)
         tb.addWidget(self.btn_demo)
 
-        self.btn_sim = _button("PLC SIMULATION", "", "", "Bat: khong can PLC that, moi tin hieu ghi vao bo nho ao")
+        self.btn_sim = _button("PLC SIMULATION", "", "", "Bật: không cần PLC thật, mọi tín hiệu ghi vào bộ nhớ ảo")
         self.btn_sim.setCheckable(True)
         self.btn_sim.setMinimumHeight(34)
         self.btn_sim.setChecked(self.ctrl.settings.plc.simulation_mode)
@@ -182,10 +180,10 @@ class MainWindow(QMainWindow):
         self.led_camera = LedIndicator()
         self.led_ai = LedIndicator()
         self.led_plc = LedIndicator()
-        for led, name, tip in ((self.led_system, "SYSTEM", "Trang thai he thong"),
-                               (self.led_camera, "CAMERA", "Ket noi camera"),
+        for led, name, tip in ((self.led_system, "SYSTEM", "Trạng thái hệ thống"),
+                               (self.led_camera, "CAMERA", "Kết nối camera"),
                                (self.led_ai, "AI", "Model YOLO / detection"),
-                               (self.led_plc, "PLC", "Ket noi PLC")):
+                               (self.led_plc, "PLC", "Kết nối PLC")):
             led.setToolTip(tip)
             hl.addWidget(led)
             lab = QLabel(name)
@@ -259,8 +257,9 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.ai_cfg, "2 AI Model")
         self.tabs.addTab(self.roi_panel, "3 ROI")
         self.tabs.addTab(self.plc_cfg, "4 PLC")
-        self.tabs.addTab(self.io_test, "I/O")
-        self.tabs.addTab(self.events_widget, "Events")
+        self.tabs.addTab(self.events_widget, "History")
+        # the manual I/O screen lives inside the PLC tab: it is PLC testing, not a topic of its own
+        self.io_test = self.plc_cfg.io_test
         self.tabs.setMinimumWidth(430)
         self.tabs.setDocumentMode(True)
         self.tabs.tabBar().setExpanding(False)
@@ -305,20 +304,20 @@ class MainWindow(QMainWindow):
         lay.setSpacing(7)
 
         lay.addWidget(_section("CAMERA"))
-        self.btn_q_connect = _button("Connect", "", "sm", "Ket noi camera dang chon o tab Camera")
-        self.btn_q_start = _button("Start", "success", "sm", "Bat luong hinh")
-        self.btn_q_stop = _button("Stop", "", "sm", "Dung luong hinh")
+        self.btn_q_connect = _button("Connect", "", "sm", "Kết nối camera đang chọn ở tab Camera")
+        self.btn_q_start = _button("Start", "success", "sm", "Bật luồng hình")
+        self.btn_q_stop = _button("Stop", "", "sm", "Dừng luồng hình")
         for b in (self.btn_q_connect, self.btn_q_start, self.btn_q_stop):
             lay.addWidget(b)
         lay.addWidget(_separator())
 
         lay.addWidget(_section("ROI"))
-        self.btn_q_add = _button("+ ROI", "primary", "sm", "Ve vung giam sat: click tung diem, double-click de dong")
-        self.btn_q_ex = _button("+ Exclusion", "", "sm", "Ve vung loai tru (nguoi trong vung nay khong tinh)")
-        self.btn_q_finish = _button("Finish", "", "sm", "Dong polygon dang ve (Enter)")
-        self.btn_q_edit = _button("Edit", "", "sm", "Keo dinh de sua vung; Shift+click canh de them dinh")
+        self.btn_q_add = _button("+ ROI", "primary", "sm", "Vẽ vùng giám sát: click từng điểm, double-click để đóng")
+        self.btn_q_ex = _button("+ Exclusion", "", "sm", "Vẽ vùng loại trừ (người trong vùng này không tính)")
+        self.btn_q_finish = _button("Finish", "", "sm", "Đóng polygon đang vẽ (Enter)")
+        self.btn_q_edit = _button("Edit", "", "sm", "Kéo đỉnh để sửa vùng; Shift+click cạnh để thêm đỉnh")
         self.btn_q_edit.setCheckable(True)
-        self.btn_q_save = _button("Save ROI", "success", "sm", "Luu cau hinh ROI ra config/roi_config.json")
+        self.btn_q_save = _button("Save ROI", "success", "sm", "Lưu cấu hình ROI ra config/roi_config.json")
         self.btn_q_finish.setEnabled(False)
         for b in (self.btn_q_add, self.btn_q_ex, self.btn_q_finish, self.btn_q_edit, self.btn_q_save):
             lay.addWidget(b)
@@ -687,11 +686,11 @@ class MainWindow(QMainWindow):
         self.tabs.setTabText(TAB_PLC, "3 PLC" if ai else "4 PLC")
         self.status_panel.set_count_labels(ai)
         if ai:
-            self.workflow.set_step_title(1, "AI Events", "Kenh su kien AI cua camera (ISAPI / HTTP)")
-            self.workflow.set_step_title(2, "Regions", "Gan region id cua camera vao ten vung va bit PLC")
+            self.workflow.set_step_title(1, "AI Events", "Kênh sự kiện AI của camera (ISAPI / HTTP)")
+            self.workflow.set_step_title(2, "Regions", "Gán region id của camera vào tên vùng và bit PLC")
         else:
-            self.workflow.set_step_title(1, "AI Model", "Nap model YOLO pretrained de phat hien person")
-            self.workflow.set_step_title(2, "ROI Zones", "Ve vung giam sat (polygon) tren hinh")
+            self.workflow.set_step_title(1, "AI Model", "Nạp model YOLO pretrained để phát hiện person")
+            self.workflow.set_step_title(2, "ROI Zones", "Vẽ vùng giám sát (polygon) trên hình")
         provider = self.ctrl.settings.camera.ai_camera.provider_enum
         self.event_monitor.set_simulation_available(provider == EventProviderType.MOCK)
         for btn in (self.btn_q_add, self.btn_q_ex, self.btn_q_finish, self.btn_q_edit, self.btn_q_save):

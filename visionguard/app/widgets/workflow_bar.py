@@ -87,11 +87,11 @@ class WorkflowBar(QWidget):
     step_clicked = Signal(int)
 
     STEPS = (
-        ("1", "Camera", "Chon nguon hinh (USB / Video / RTSP), Connect roi Start"),
-        ("2", "AI Model", "Nap model YOLO pretrained de phat hien person"),
-        ("3", "ROI Zones", "Ve vung giam sat (polygon) va vung loai tru tren hinh"),
-        ("4", "PLC", "Ket noi PLC that qua MC Protocol hoac bat Simulation"),
-        ("5", "Run", "Nhan START SYSTEM (F5) de bat dau giam sat"),
+        ("1", "Camera", "Chọn nguồn hình (USB / Video / RTSP), Connect rồi Start"),
+        ("2", "AI Model", "Nạp model YOLO pretrained để phát hiện person"),
+        ("3", "ROI Zones", "Vẽ vùng giám sát (polygon) và vùng loại trừ trên hình"),
+        ("4", "PLC", "Kết nối PLC thật qua MC Protocol hoặc bật Simulation"),
+        ("5", "Run", "Nhấn START SYSTEM (F5) để bắt đầu giám sát"),
     )
 
     def __init__(self, parent: QWidget | None = None) -> None:

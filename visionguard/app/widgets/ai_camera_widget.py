@@ -1,15 +1,21 @@
-"""AI Camera configuration page: network, RTSP video and the AI event channel."""
+"""AI Camera configuration: what an operator needs first, everything else behind Advanced.
+
+Visible by default: IP, user, password, event provider, the two debounce delays and the three
+test buttons - enough to bring a Hikvision AcuSense camera online. Ports, stream paths,
+timeouts and fail-safe details only appear when 'Advanced settings' is ticked.
+"""
 from __future__ import annotations
 
 from copy import deepcopy
 
 from PySide6.QtCore import Signal
-from PySide6.QtWidgets import (QCheckBox, QComboBox, QDoubleSpinBox, QFormLayout, QGridLayout, QGroupBox, QHBoxLayout,
-                               QLabel, QLineEdit, QPushButton, QSpinBox, QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QCheckBox, QComboBox, QDoubleSpinBox, QFormLayout, QGridLayout, QGroupBox, QLabel,
+                               QLineEdit, QPushButton, QSpinBox, QVBoxLayout, QWidget)
 
 from ...camera.rtsp_camera import build_rtsp_url, mask_url
 from ...config.schemas import AiCameraConfig, CameraBrand, EventProviderType
-from ..theme import COLOR_ERROR, COLOR_OK, COLOR_TEXT_DIM, COLOR_TEXT_MUTED
+from ..theme import COLOR_ERROR, COLOR_OK, COLOR_TEXT_DIM
+from .form_helpers import AdvancedSection, hint
 
 
 class AiCameraWidget(QWidget):
@@ -23,6 +29,7 @@ class AiCameraWidget(QWidget):
         super().__init__(parent)
         self._config = deepcopy(config)
         self._brand = CameraBrand.HIKVISION
+        self.advanced = AdvancedSection()
         self._build()
         self.set_config(config)
 
@@ -32,33 +39,37 @@ class AiCameraWidget(QWidget):
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(8)
 
-        # ---------------------------------------------------------- network
-        g_net = QGroupBox("CAMERA NETWORK")
+        # ---------------------------------------------------------- camera address
+        g_net = QGroupBox("CAMERA")
         f = QFormLayout(g_net)
         self.edt_ip = QLineEdit()
+        self.edt_ip.setPlaceholderText("192.168.1.64")
+        self.edt_user = QLineEdit()
+        self.edt_pass = QLineEdit()
+        self.edt_pass.setEchoMode(QLineEdit.EchoMode.Password)
+        f.addRow("IP Address", self.edt_ip)
+        f.addRow("Username", self.edt_user)
+        f.addRow("Password", self.edt_pass)
+
         self.spn_http = QSpinBox()
         self.spn_http.setRange(1, 65535)
         self.spn_rtsp = QSpinBox()
         self.spn_rtsp.setRange(1, 65535)
-        self.edt_user = QLineEdit()
-        self.edt_pass = QLineEdit()
-        self.edt_pass.setEchoMode(QLineEdit.EchoMode.Password)
         self.chk_https = QCheckBox("Use HTTPS")
-        f.addRow("IP Address", self.edt_ip)
         f.addRow("HTTP Port", self.spn_http)
         f.addRow("RTSP Port", self.spn_rtsp)
-        f.addRow("Username", self.edt_user)
-        f.addRow("Password", self.edt_pass)
-        f.addRow(self.chk_https)
+        f.addRow("", self.chk_https)
+        self.advanced.rows(f, self.spn_http, self.spn_rtsp, self.chk_https)
+        f.addRow(hint("Tài khoản phải có quyền xem từ xa. Cổng mặc định 80 (HTTP) và 554 (RTSP)."))
         lay.addWidget(g_net)
 
-        # ---------------------------------------------------------- video
+        # ---------------------------------------------------------- video (advanced only)
         g_video = QGroupBox("VIDEO (RTSP)")
         fv = QFormLayout(g_video)
         self.edt_channel = QLineEdit()
-        self.edt_channel.setPlaceholderText("101 = main stream, 102 = sub stream")
+        self.edt_channel.setPlaceholderText("101 = luồng chính, 102 = luồng phụ")
         self.edt_rtsp_url = QLineEdit()
-        self.edt_rtsp_url.setPlaceholderText("rtsp://... (overrides the fields above when set)")
+        self.edt_rtsp_url.setPlaceholderText("rtsp://...  (chỉ điền khi muốn ghi đè)")
         self.cmb_transport = QComboBox()
         self.cmb_transport.addItems(["tcp", "udp"])
         fv.addRow("Stream channel", self.edt_channel)
@@ -68,27 +79,29 @@ class AiCameraWidget(QWidget):
         self.lbl_rtsp_preview.setWordWrap(True)
         self.lbl_rtsp_preview.setProperty("class", "hint")
         fv.addRow(self.lbl_rtsp_preview)
+        self.advanced.widget(g_video)
         lay.addWidget(g_video)
 
-        # ---------------------------------------------------------- events
+        # ---------------------------------------------------------- event channel
         g_event = QGroupBox("AI EVENT CHANNEL")
         fe = QFormLayout(g_event)
         self.cmb_provider = QComboBox()
         for provider in EventProviderType:
             self.cmb_provider.addItem(provider.label, provider.value)
         self.cmb_provider.currentIndexChanged.connect(self._provider_changed)
+        fe.addRow("Event provider", self.cmb_provider)
         self.edt_event_url = QLineEdit()
-        self.edt_event_url.setPlaceholderText("/ISAPI/Event/notification/alertStream (default)")
+        self.edt_event_url.setPlaceholderText("/ISAPI/Event/notification/alertStream (mặc định)")
         self.spn_event_timeout = QDoubleSpinBox()
         self.spn_event_timeout.setRange(0.5, 60.0)
         self.spn_event_timeout.setSuffix(" s")
         self.spn_health = QDoubleSpinBox()
         self.spn_health.setRange(5.0, 600.0)
         self.spn_health.setSuffix(" s")
-        fe.addRow("Event provider", self.cmb_provider)
         fe.addRow("Event API path", self.edt_event_url)
         fe.addRow("Read timeout", self.spn_event_timeout)
         fe.addRow("Health check every", self.spn_health)
+        self.advanced.rows(fe, self.edt_event_url, self.spn_event_timeout, self.spn_health)
         self.lbl_provider_hint = QLabel("")
         self.lbl_provider_hint.setWordWrap(True)
         self.lbl_provider_hint.setProperty("class", "hint")
@@ -102,35 +115,39 @@ class AiCameraWidget(QWidget):
         self.spn_on.setRange(0, 60000)
         self.spn_on.setSuffix(" ms")
         self.spn_on.setSingleStep(50)
+        self.spn_on.setToolTip("Camera phải báo liên tục bao lâu thì mới bật bit PLC")
         self.spn_off = QSpinBox()
         self.spn_off.setRange(0, 600000)
         self.spn_off.setSuffix(" ms")
         self.spn_off.setSingleStep(100)
+        self.spn_off.setToolTip("Vùng phải im bao lâu thì mới tắt bit PLC")
+        fl.addRow("ON delay", self.spn_on)
+        fl.addRow("OFF delay", self.spn_off)
+        fl.addRow(hint("ON delay: bao lâu mới báo CÓ NGƯỜI.  OFF delay: bao lâu mới báo HẾT NGƯỜI. "
+                       "Tăng lên nếu bit PLC nhấp nháy."))
+
         self.spn_clear = QDoubleSpinBox()
         self.spn_clear.setRange(0.0, 300.0)
         self.spn_clear.setSuffix(" s")
-        self.spn_clear.setSpecialValueText("disabled")
+        self.spn_clear.setSpecialValueText("tắt")
+        self.spn_clear.setToolTip("Camera không gửi 'inactive' thì sau bao lâu coi như hết người")
         self.spn_line_hold = QDoubleSpinBox()
         self.spn_line_hold.setRange(0.0, 60.0)
         self.spn_line_hold.setSuffix(" s")
-        self.spn_line_hold.setSpecialValueText("ignore")
-        self.chk_count = QCheckBox("Count people (region enter / exit)")
-        self.chk_strict = QCheckBox("Only accept events with target = human")
-        self.chk_fault_event = QCheckBox("Event channel lost = FAULT")
-        self.chk_fault_video = QCheckBox("Video lost = FAULT")
-        fl.addRow("ON delay", self.spn_on)
-        fl.addRow("OFF delay", self.spn_off)
+        self.spn_line_hold.setSpecialValueText("bỏ qua")
+        self.spn_line_hold.setToolTip("Sự kiện băng qua vạch không có lúc kết thúc, giữ OCCUPIED bao lâu")
+        self.chk_count = QCheckBox("Đếm người theo sự kiện vào / ra vùng")
+        self.chk_strict = QCheckBox("Chỉ nhận sự kiện có target = human")
+        self.chk_fault_event = QCheckBox("Mất kênh sự kiện = FAULT")
+        self.chk_fault_video = QCheckBox("Mất hình RTSP = FAULT")
         fl.addRow("Clear timeout", self.spn_clear)
         fl.addRow("Line cross hold", self.spn_line_hold)
-        fl.addRow(self.chk_count)
-        fl.addRow(self.chk_strict)
-        fl.addRow(self.chk_fault_event)
-        fl.addRow(self.chk_fault_video)
-        hint = QLabel("Clear timeout releases a zone when the camera never sends the 'inactive' alarm. "
-                      "A missed exit keeps the zone OCCUPIED - it never fakes a CLEAR.")
-        hint.setWordWrap(True)
-        hint.setProperty("class", "hint")
-        fl.addRow(hint)
+        fl.addRow("", self.chk_count)
+        fl.addRow("", self.chk_strict)
+        fl.addRow("", self.chk_fault_event)
+        fl.addRow("", self.chk_fault_video)
+        self.advanced.rows(fl, self.spn_clear, self.spn_line_hold, self.chk_count, self.chk_strict,
+                           self.chk_fault_event, self.chk_fault_video)
         lay.addWidget(g_logic)
 
         # ---------------------------------------------------------- tests
@@ -139,9 +156,9 @@ class AiCameraWidget(QWidget):
         self.btn_test_camera = QPushButton("Test Camera")
         self.btn_test_rtsp = QPushButton("Test RTSP")
         self.btn_test_event = QPushButton("Test Event")
-        self.btn_test_camera.setToolTip("Doc thong tin thiet bi qua ISAPI/HTTP de kiem tra IP va mat khau")
-        self.btn_test_rtsp.setToolTip("Mo thu luong video RTSP")
-        self.btn_test_event.setToolTip("Mo kenh su kien vai giay va bao lai nhung gi camera gui")
+        self.btn_test_camera.setToolTip("Đọc thông tin thiết bị để kiểm tra IP, user và mật khẩu")
+        self.btn_test_rtsp.setToolTip("Mở thử luồng video RTSP")
+        self.btn_test_event.setToolTip("Nghe kênh sự kiện vài giây và báo lại camera gửi gì")
         gl.addWidget(self.btn_test_camera, 0, 0)
         gl.addWidget(self.btn_test_rtsp, 0, 1)
         gl.addWidget(self.btn_test_event, 0, 2)
@@ -160,26 +177,30 @@ class AiCameraWidget(QWidget):
         for combo in self.findChildren(QComboBox):
             combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
             combo.setMinimumContentsLength(10)
+        self.advanced.set_visible(False)
 
     # ------------------------------------------------------------------ helpers
+    def set_advanced_visible(self, visible: bool) -> None:
+        self.advanced.set_visible(visible)
+
     def _provider_changed(self) -> None:
         provider = str(self.cmb_provider.currentData())
         hints = {
             EventProviderType.ISAPI.value:
-                "Hikvision: enable an AI rule (intrusion / region entrance) and tick "
-                "'Notify surveillance center' in Linkage Method, then Test Event.",
+                "Hikvision: bật rule AI (Intrusion / Region Entrance) trên camera và tick "
+                "'Notify Surveillance Center', sau đó bấm Test Event.",
             EventProviderType.DAHUA_HTTP.value:
-                "Dahua: IVS rule with 'Human' target; the PC attaches to eventManager.cgi.",
+                "Dahua: bật rule IVS với target Human; PC sẽ attach vào eventManager.cgi.",
             EventProviderType.GENERIC_HTTP.value:
-                "Generic: give the full path of an endpoint that streams or returns XML/JSON alarms.",
+                "Generic: điền đường dẫn đầy đủ của endpoint trả về XML/JSON cảnh báo.",
             EventProviderType.MOCK.value:
-                "Simulated: no camera is contacted. Use the buttons in the AI Event tab to inject "
-                "person enter / exit events and demo the whole chain.",
+                "Mô phỏng: không kết nối camera nào. Dùng tab Simulate để tự tạo sự kiện người "
+                "vào / ra và chạy thử cả chuỗi.",
         }
         self.lbl_provider_hint.setText(hints.get(provider, ""))
         simulated = provider == EventProviderType.MOCK.value
         for w in (self.edt_event_url, self.spn_event_timeout, self.spn_health,
-                  self.btn_test_camera, self.btn_test_event):
+                  self.btn_test_camera, self.btn_test_event, self.btn_test_rtsp):
             w.setEnabled(not simulated)
 
     def _update_preview(self) -> None:
@@ -236,6 +257,7 @@ class AiCameraWidget(QWidget):
         self.chk_fault_video.setChecked(lg.fault_on_video_loss)
         self._provider_changed()
         self._update_preview()
+        self.advanced.apply()
 
     def get_config(self) -> AiCameraConfig:
         cfg = deepcopy(self._config)
