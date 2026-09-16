@@ -35,6 +35,26 @@ def strip_namespace(tag: str) -> str:
     return tag.split("}", 1)[1] if "}" in tag else tag
 
 
+def short_error(exc: Exception, host: str = "") -> str:
+    """One readable line instead of a urllib3 stack of nested messages."""
+    name = type(exc).__name__
+    text = str(exc)
+    where = f" {host}" if host else ""
+    if "ConnectTimeout" in name or "ConnectionError" in name or "MaxRetryError" in name:
+        if "refused" in text.lower():
+            return f"cannot reach{where} - connection refused (wrong port, or HTTP disabled)"
+        if "timed out" in text.lower() or "timeout" in text.lower():
+            return f"cannot reach{where} - no answer (check IP, cable, firewall)"
+        return f"cannot reach{where} - network error"
+    if "ReadTimeout" in name or "Timeout" in name:
+        return f"{where.strip() or 'camera'} did not answer in time"
+    if "SSLError" in name:
+        return f"TLS error on{where} - try turning HTTPS off"
+    # keep it to one short sentence, never the whole urllib3 chain
+    text = text.split("(Caused by")[0].strip().rstrip(":")
+    return f"{name}: {text[:120]}"
+
+
 def mask_url(url: str) -> str:
     """Never let credentials reach the log or the UI."""
     if "@" in url and "//" in url:
@@ -75,6 +95,10 @@ class IsapiClient:
     def url(self, path: str) -> str:
         return self.base_url + (path if path.startswith("/") else "/" + path)
 
+    def _host(self) -> str:
+        """host:port without scheme or credentials, for messages."""
+        return self.base_url.split("//", 1)[-1]
+
     # ------------------------------------------------------------------ session
     def _ensure_session(self):
         if not _REQUESTS_OK:
@@ -111,7 +135,7 @@ class IsapiClient:
             try:
                 resp = session.get(url, auth=self._auth(), timeout=to, verify=self.verify_tls)
             except Exception as exc:
-                raise IsapiError(f"{mask_url(url)}: {exc}") from exc
+                raise IsapiError(short_error(exc, self._host())) from exc
             if resp.status_code == 401 and self._auth_mode == "digest":
                 log.debug("ISAPI digest rejected, retrying with basic auth")
                 self._auth_mode = "basic"
@@ -160,7 +184,7 @@ class IsapiClient:
             resp = session.get(url, auth=self._auth(), stream=True, verify=self.verify_tls,
                                timeout=(self.timeout, read_timeout))
         except Exception as exc:
-            raise IsapiError(f"Cannot open event stream {mask_url(url)}: {exc}") from exc
+            raise IsapiError(f"event stream: {short_error(exc, self._host())}") from exc
         if resp.status_code == 401 and self._auth_mode == "digest":
             resp.close()
             self._auth_mode = "basic"
@@ -168,7 +192,7 @@ class IsapiClient:
                 resp = session.get(url, auth=self._auth(), stream=True, verify=self.verify_tls,
                                    timeout=(self.timeout, read_timeout))
             except Exception as exc:
-                raise IsapiError(f"Cannot open event stream: {exc}") from exc
+                raise IsapiError(f"event stream: {short_error(exc, self._host())}") from exc
         if resp.status_code >= 400:
             code = resp.status_code
             resp.close()

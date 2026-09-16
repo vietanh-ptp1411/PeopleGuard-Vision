@@ -255,7 +255,7 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.status_panel, "Status")
         self.tabs.addTab(self.camera_cfg, "1 Camera")
         self.tabs.addTab(self.event_monitor, "2 AI Event")
-        self.tabs.addTab(self.ai_cfg, "YOLO")
+        self.tabs.addTab(self.ai_cfg, "2 AI Model")
         self.tabs.addTab(self.roi_panel, "3 ROI")
         self.tabs.addTab(self.plc_cfg, "4 PLC")
         self.tabs.addTab(self.io_test, "I/O")
@@ -681,6 +681,9 @@ class MainWindow(QMainWindow):
         self.tabs.setTabVisible(TAB_EVENT, ai)
         self.tabs.setTabVisible(TAB_AI, not ai)
         self.tabs.setTabVisible(TAB_ROI, not ai)
+        # keep the numbers of the *visible* tabs in step with the workflow bar
+        self.tabs.setTabText(TAB_PLC, "3 PLC" if ai else "4 PLC")
+        self.status_panel.set_count_labels(ai)
         if ai:
             self.workflow.set_step_title(1, "AI Events", "Kenh su kien AI cua camera (ISAPI / HTTP)")
             self.workflow.set_step_title(2, "Regions", "Gan region id cua camera vao ten vung va bit PLC")

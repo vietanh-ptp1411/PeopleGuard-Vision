@@ -118,8 +118,10 @@ class CameraConfigWidget(QWidget):
         lrc = QFormLayout(g_rc)
         self.chk_reconnect = QCheckBox("Enabled")
         self.spn_frame_timeout = QDoubleSpinBox()
-        self.spn_frame_timeout.setRange(0.5, 120.0)
+        self.spn_frame_timeout.setRange(1.0, 120.0)   # below ~1 s an RTSP hiccup looks like a lost camera
         self.spn_frame_timeout.setSuffix(" s")
+        self.spn_frame_timeout.setToolTip("Khong nhan duoc hinh qua lau thi coi la mat camera. "
+                                          "Duoi 1 giay se bao mat ket noi oan khi mang giat.")
         self.edt_delays = QLineEdit()
         self.edt_delays.setPlaceholderText("1, 2, 5")
         lrc.addRow(self.chk_reconnect)
@@ -476,6 +478,7 @@ class CameraConfigWidget(QWidget):
             combo.blockSignals(False)
         idx = self.cmb_type.findData(cfg.camera_type)
         self.cmb_type.setCurrentIndex(max(0, idx))
+        self.page_ai.set_brand_display(cfg.brand_enum)
         self.page_ai.set_config(cfg.ai_camera)
         ai = cfg.is_ai_camera
         self.g_type.setVisible(not ai)

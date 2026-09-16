@@ -160,6 +160,17 @@ class StatusPanel(QWidget):
     def set_detection_mode(self, text: str) -> None:
         self.mode_row.set_value(text)
 
+    def set_count_labels(self, ai_camera: bool) -> None:
+        """The two big numbers mean different things in each detection mode."""
+        if ai_camera:
+            self.tile_total.caption.setText("PEOPLE\nCOUNTED")
+            self.tile_in_roi.caption.setText("ZONES\nOCCUPIED")
+            self.tile_ignored.caption.setText("IGNORED\n(NOT HUMAN)")
+        else:
+            self.tile_total.caption.setText("PERSONS\nDETECTED")
+            self.tile_in_roi.caption.setText("IN ROI")
+            self.tile_ignored.caption.setText("IGNORED\n(EXCLUSION)")
+
     def set_ai_camera_mode(self, ai_camera: bool) -> None:
         """Show only the rows that mean something in the active mode."""
         self.event_row.setVisible(ai_camera)

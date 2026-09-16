@@ -160,7 +160,7 @@ class IndustrialCameraConfig:
 @dataclass
 class ReconnectConfig:
     enabled: bool = True
-    frame_timeout_s: float = 5.0          # no frame for this long => camera lost
+    frame_timeout_s: float = 5.0          # no frame for this long => camera lost (keep >= 1 s)
     delays_s: List[float] = field(default_factory=lambda: [1.0, 2.0, 5.0])
     max_attempts: int = 0                 # 0 = retry forever
 
@@ -211,7 +211,24 @@ class AiCameraConfig:
         port = f":{self.http_port}" if self.http_port not in (80, 443) else ""
         return f"{scheme}://{self.ip}{port}"
 
-    def to_rtsp_config(self) -> "RtspCameraConfig":
+    def stream_path(self, brand: str = CameraBrand.HIKVISION.value) -> str:
+        """RTSP path for this camera.
+
+        A channel that already starts with "/" is used verbatim, so any camera can be
+        supported by typing its own path; otherwise the brand's usual template is used.
+        """
+        channel = (self.rtsp_channel or "101").strip()
+        if channel.startswith("/"):
+            return channel
+        if brand == CameraBrand.DAHUA.value:
+            # Dahua: 101 -> channel 1 main stream, 102 -> channel 1 sub stream
+            main = channel[-2:] if len(channel) >= 3 else "01"
+            cam = channel[:-2] if len(channel) >= 3 else channel
+            subtype = 0 if main in ("01", "1") else 1
+            return f"/cam/realmonitor?channel={cam or 1}&subtype={subtype}"
+        return f"/Streaming/Channels/{channel}"
+
+    def to_rtsp_config(self, brand: str = CameraBrand.HIKVISION.value) -> "RtspCameraConfig":
         """Video settings for the RTSP receiver, derived from the AI camera settings."""
         return RtspCameraConfig(
             url=self.rtsp_url.strip(),
@@ -219,7 +236,7 @@ class AiCameraConfig:
             port=self.rtsp_port,
             username=self.username,
             password=self.password,
-            path=f"/Streaming/Channels/{self.rtsp_channel}",
+            path=self.stream_path(brand),
             transport=self.rtsp_transport,
         )
 
