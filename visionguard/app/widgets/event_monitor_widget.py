@@ -7,8 +7,8 @@ from typing import Dict, List, Optional
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QGridLayout, QGroupBox, QHBoxLayout, QHeaderView,
-                               QLabel, QLineEdit, QPlainTextEdit, QPushButton, QSizePolicy, QTableWidget,
-                               QTableWidgetItem, QTabWidget, QVBoxLayout, QWidget)
+                               QLabel, QLineEdit, QPlainTextEdit, QPushButton, QScrollArea, QSizePolicy,
+                               QTableWidget, QTableWidgetItem, QTabWidget, QVBoxLayout, QWidget)
 
 from ...camera.events.camera_event import CameraEvent, CameraEventType
 from ...config.region_mapping import RegionMapping
@@ -17,6 +17,25 @@ from ...plc.device_address import is_valid_device
 from ..theme import COLOR_ERROR, COLOR_OK, COLOR_TEXT, COLOR_TEXT_DIM, COLOR_TEXT_MUTED, COLOR_WARN
 
 MAX_ROWS = 300
+
+
+class CompactTable(QTableWidget):
+    """QTableWidget with a modest size hint.
+
+    Qt's default is 256 px tall whatever the content. Inside a QScrollArea that inflates the
+    panel and makes it scroll even when everything would fit; the table still grows through
+    the layout stretch factor.
+    """
+
+    def sizeHint(self):  # noqa: N802 (Qt API)
+        hint = super().sizeHint()
+        hint.setHeight(135)
+        return hint
+
+    def minimumSizeHint(self):  # noqa: N802
+        hint = super().minimumSizeHint()
+        hint.setHeight(min(hint.height(), 110))
+        return hint
 
 
 class EventMonitorWidget(QWidget):
@@ -39,67 +58,109 @@ class EventMonitorWidget(QWidget):
 
     # ------------------------------------------------------------------ build
     def _build(self) -> None:
-        lay = QVBoxLayout(self)
+        # Everything lives inside a scroll area: on a short screen the panel scrolls
+        # instead of compressing the buttons into each other.
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        outer.addWidget(scroll)
+        body = QWidget()
+        scroll.setWidget(body)
+        lay = QVBoxLayout(body)
         lay.setSpacing(8)
 
         # ---------------------------------------------------------- channel header
-        head = QHBoxLayout()
+        header_card = QWidget()
+        head = QVBoxLayout(header_card)
+        head.setContentsMargins(0, 0, 0, 0)
+        head.setSpacing(4)
+        top = QHBoxLayout()
+        top.setSpacing(6)
         self.lbl_channel = QLabel("AI EVENT CHANNEL: DISCONNECTED")
         self.lbl_channel.setStyleSheet(f"color: {COLOR_TEXT_DIM}; font-weight: 700;")
         self.lbl_channel.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
-        head.addWidget(self.lbl_channel, 1)
+        top.addWidget(self.lbl_channel, 1)
         self.btn_connect = QPushButton("Connect")
         self.btn_connect.setProperty("size", "sm")
         self.btn_disconnect = QPushButton("Disconnect")
         self.btn_disconnect.setProperty("size", "sm")
-        head.addWidget(self.btn_connect)
-        head.addWidget(self.btn_disconnect)
-        lay.addLayout(head)
+        top.addWidget(self.btn_connect)
+        top.addWidget(self.btn_disconnect)
+        head.addLayout(top)
+        # the reason goes on its own line so it is never cut off by the buttons
+        self.lbl_channel_detail = QLabel("")
+        self.lbl_channel_detail.setWordWrap(True)
+        self.lbl_channel_detail.setProperty("class", "hint")
+        head.addWidget(self.lbl_channel_detail)
+        lay.addWidget(header_card)
 
-        tabs = QTabWidget()
-        tabs.addTab(self._build_monitor(), "Event Monitor")
-        tabs.addTab(self._build_regions(), "Regions")
-        tabs.addTab(self._build_raw(), "RAW EVENT")
-        lay.addWidget(tabs, 1)
+        self.inner_tabs = QTabWidget()
+        self.inner_tabs.addTab(self._build_monitor(), "Event Monitor")
+        self.inner_tabs.addTab(self._build_regions(), "Regions")
+        self.inner_tabs.addTab(self._build_simulate(), "Simulate")
+        self.inner_tabs.addTab(self._build_raw(), "RAW EVENT")
+        self.inner_tabs.setMinimumHeight(200)
+        lay.addWidget(self.inner_tabs, 1)
 
-        # ---------------------------------------------------------- simulation
-        g_sim = QGroupBox("SIMULATE CAMERA EVENTS (no camera needed)")
-        gl = QGridLayout(g_sim)
-        gl.addWidget(QLabel("Region"), 0, 0)
+        self.btn_connect.clicked.connect(self.connect_requested)
+        self.btn_disconnect.clicked.connect(self.disconnect_requested)
+
+    def _build_simulate(self) -> QWidget:
+        """Inject camera events by hand - demo and commissioning without a camera."""
+        page = QWidget()
+        lay = QVBoxLayout(page)
+        lay.setContentsMargins(8, 8, 8, 8)
+        lay.setSpacing(8)
+
+        info = QLabel("Feed the whole chain (state machine -> debounce -> PLC) with events you "
+                      "trigger yourself. Everything downstream behaves exactly as with a real camera.")
+        info.setWordWrap(True)
+        info.setProperty("class", "hint")
+        lay.addWidget(info)
+
+        row = QHBoxLayout()
+        row.addWidget(QLabel("Region id"))
         self.edt_sim_region = QLineEdit("1")
-        self.edt_sim_region.setMaximumWidth(70)
-        gl.addWidget(self.edt_sim_region, 0, 1)
+        self.edt_sim_region.setMaximumWidth(80)
+        row.addWidget(self.edt_sim_region)
+        row.addStretch(1)
+        lay.addLayout(row)
+
+        grid = QGridLayout()
+        grid.setSpacing(6)
         buttons = [
             ("Person Enter", "enter", "success"),
             ("Person Exit", "exit", ""),
             ("Intrusion ON", "intrusion_on", "success"),
             ("Intrusion OFF", "intrusion_off", ""),
-            ("Vehicle", "vehicle", ""),
-            ("Disconnect", "disconnect", "danger"),
-            ("Reconnect", "reconnect", ""),
+            ("Vehicle (ignored)", "vehicle", ""),
+            ("Camera Disconnect", "disconnect", "danger"),
+            ("Camera Reconnect", "reconnect", ""),
         ]
         for i, (label, action, cls) in enumerate(buttons):
             btn = QPushButton(label)
             if cls:
                 btn.setProperty("class", cls)
-            btn.setProperty("size", "sm")
+            btn.setMinimumHeight(34)
             btn.clicked.connect(lambda _=False, a=action: self.simulate_requested.emit(a, self._sim_region()))
-            gl.addWidget(btn, 1 + i // 4, i % 4)
-        self.lbl_sim_hint = QLabel("Switch the event provider to 'Simulated events' in the Camera tab "
-                                   "to use these buttons.")
+            grid.addWidget(btn, i // 2, i % 2)
+        lay.addLayout(grid)
+
+        self.lbl_sim_hint = QLabel("These buttons need the event provider set to 'Simulated events' "
+                                   "in the Camera tab.")
         self.lbl_sim_hint.setWordWrap(True)
         self.lbl_sim_hint.setProperty("class", "hint")
-        gl.addWidget(self.lbl_sim_hint, 3, 0, 1, 4)
-        lay.addWidget(g_sim)
-
-        self.btn_connect.clicked.connect(self.connect_requested)
-        self.btn_disconnect.clicked.connect(self.disconnect_requested)
+        lay.addWidget(self.lbl_sim_hint)
+        lay.addStretch(1)
+        return page
 
     def _build_monitor(self) -> QWidget:
         page = QWidget()
         lay = QVBoxLayout(page)
         lay.setContentsMargins(6, 6, 6, 6)
-        self.table = QTableWidget(0, len(self.EVENT_COLS))
+        self.table = CompactTable(0, len(self.EVENT_COLS))
         self.table.setHorizontalHeaderLabels(self.EVENT_COLS)
         header = self.table.horizontalHeader()
         for col in range(len(self.EVENT_COLS)):
@@ -132,7 +193,7 @@ class EventMonitorWidget(QWidget):
         info.setProperty("class", "hint")
         lay.addWidget(info)
 
-        self.region_table = QTableWidget(0, len(self.REGION_COLS))
+        self.region_table = CompactTable(0, len(self.REGION_COLS))
         self.region_table.setHorizontalHeaderLabels(self.REGION_COLS)
         header = self.region_table.horizontalHeader()
         for col in range(len(self.REGION_COLS)):
@@ -194,6 +255,7 @@ class EventMonitorWidget(QWidget):
         self.raw_text.setMaximumBlockCount(4000)
         self.raw_text.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
         self.raw_text.setStyleSheet("font-family: Consolas, 'Cascadia Mono', monospace; font-size: 9pt;")
+        self.raw_text.setMinimumHeight(120)
         lay.addWidget(self.raw_text, 1)
         row = QHBoxLayout()
         self.chk_raw_enabled = QCheckBox("Capture raw payloads")
@@ -215,16 +277,20 @@ class EventMonitorWidget(QWidget):
         colors = {"ONLINE": COLOR_OK, "CONNECTING": COLOR_WARN, "RECONNECTING": COLOR_WARN,
                   "ERROR": COLOR_ERROR, "DISCONNECTED": COLOR_TEXT_DIM, "DISABLED": COLOR_TEXT_MUTED}
         color = colors.get(state, COLOR_TEXT_DIM)
-        text = f"AI EVENT CHANNEL: {state}"
-        if message:
-            text += f"   -   {message}"
-        self.lbl_channel.setText(text)
+        self.lbl_channel.setText(f"AI EVENT CHANNEL: {state}")
         self.lbl_channel.setStyleSheet(f"color: {color}; font-weight: 700;")
+        self.lbl_channel_detail.setText(message or "")
+        self.lbl_channel_detail.setVisible(bool(message))
         self.btn_connect.setEnabled(state not in ("ONLINE", "CONNECTING"))
         self.btn_disconnect.setEnabled(state in ("ONLINE", "CONNECTING", "RECONNECTING", "ERROR"))
 
     def set_simulation_available(self, available: bool) -> None:
         self.lbl_sim_hint.setVisible(not available)
+        index = self.inner_tabs.indexOf(self.lbl_sim_hint.parentWidget())
+        if index >= 0:
+            self.inner_tabs.setTabText(index, "Simulate" if available else "Simulate (off)")
+            self.inner_tabs.setTabToolTip(index, "" if available else
+                                          "Set the event provider to 'Simulated events' in the Camera tab")
 
     def add_event(self, event: CameraEvent) -> None:
         self.table.insertRow(0)

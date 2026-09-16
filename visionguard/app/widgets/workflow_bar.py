@@ -72,6 +72,8 @@ class StepChip(QFrame):
         self.title.setStyleSheet(f"color: {title}; font-weight: 700; font-size: 9.5pt;")
         if detail:
             self.detail.setText(detail)
+            # the chip is narrow, so the full reason lives in the tooltip
+            self.detail.setToolTip(detail)
 
     def mousePressEvent(self, event) -> None:  # noqa: N802
         if event.button() == Qt.MouseButton.LeftButton:
