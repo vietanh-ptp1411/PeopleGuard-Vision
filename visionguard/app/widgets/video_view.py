@@ -34,13 +34,13 @@ VERTEX_TOL_PX = 9.0
 EDGE_TOL_PX = 7.0
 
 PLACEHOLDER_YOLO = (
-    "Step 1  -  open the 'Camera' tab, pick a source (USB / Video file / RTSP), then Connect + Start\n"
-    "Step 2  -  'YOLO' tab: Load Model        Step 3  -  'ROI' tab: draw the monitored zone\n"
-    "Step 4  -  'PLC' tab: Connect or keep Simulation        Step 5  -  press START SYSTEM (F5)")
+    "1  ·  Tab Camera: chọn nguồn hình (USB / Video / RTSP) rồi Connect + Start\n"
+    "2  ·  Tab AI Model: Load Model          3  ·  Tab Zones: vẽ vùng giám sát\n"
+    "4  ·  Tab PLC: Connect hoặc bật PLC SIM          5  ·  Nhấn START (F5)")
 PLACEHOLDER_AI_CAMERA = (
-    "Step 1  -  'Camera' tab: IP, user and password of the AI camera, then Test Camera + Test Event\n"
-    "Step 2  -  'AI Event' tab: map each camera region to a PLC device\n"
-    "Step 3  -  'PLC' tab: Connect or keep Simulation        Step 4  -  press START SYSTEM (F5)")
+    "1  ·  Tab Camera: nhập IP, user, password của camera AI rồi bấm 3 nút Test\n"
+    "2  ·  Tab AI Events: gán từng vùng của camera vào một địa chỉ PLC\n"
+    "3  ·  Tab PLC: Connect hoặc bật PLC SIM          4  ·  Nhấn START (F5)")
 
 
 class VideoView(QWidget):

@@ -9,7 +9,7 @@ from PySide6.QtWidgets import (QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog
 
 from ...config.schemas import AIConfig, ContainmentMode
 from ..theme import COLOR_ERROR, COLOR_OK, COLOR_TEXT_DIM
-from .form_helpers import AdvancedSection, advanced_checkbox, hint
+from .form_helpers import AdvancedSection, advanced_checkbox, hint, page_header
 
 
 class AIConfigWidget(QWidget):
@@ -37,11 +37,9 @@ class AIConfigWidget(QWidget):
         lay = QVBoxLayout(body)
         lay.setSpacing(8)
 
-        head = QHBoxLayout()
         self.chk_advanced = advanced_checkbox(self.advanced)
-        head.addWidget(self.chk_advanced)
-        head.addStretch(1)
-        lay.addLayout(head)
+        lay.addWidget(page_header("AI Model", "Model YOLO chạy trên PC để phát hiện người",
+                                  self.chk_advanced))
 
         g = QGroupBox("YOLO PERSON DETECTOR")
         f = QFormLayout(g)
@@ -82,7 +80,7 @@ class AIConfigWidget(QWidget):
         f.addRow(self.lbl_model)
         lay.addWidget(g)
 
-        g2 = QGroupBox("ROI LOGIC & DEBOUNCE")
+        g2 = QGroupBox("ROI LOGIC && DEBOUNCE")
         f2 = QFormLayout(g2)
         self.cmb_mode = QComboBox()
         for m in ContainmentMode:

@@ -278,6 +278,23 @@ class CameraConfig:
     def is_ai_camera(self) -> bool:
         return self.mode_enum == DetectionMode.AI_CAMERA
 
+    def describe_source(self) -> str:
+        """One line naming where the picture comes from, for the live view header."""
+        if self.is_ai_camera:
+            brand = self.brand_enum.value.capitalize()
+            host = self.ai_camera.ip or "chưa đặt IP"
+            return f"{brand} RTSP · {host}"
+        kind = self.type_enum
+        if kind == CameraType.USB:
+            return f"USB camera #{self.usb.device_index}"
+        if kind == CameraType.VIDEO:
+            name = self.video.path.replace(chr(92), "/").rsplit("/", 1)[-1]
+            return f"Video file · {name}" if name else "Video file"
+        if kind == CameraType.RTSP:
+            # never echo rtsp.url here: a full URL carries the password
+            return f"RTSP · {self.rtsp.ip}" if self.rtsp.ip else "RTSP (URL tuỳ chỉnh)"
+        return kind.value.upper()
+
 
 # --------------------------------------------------------------------------- AI
 @dataclass

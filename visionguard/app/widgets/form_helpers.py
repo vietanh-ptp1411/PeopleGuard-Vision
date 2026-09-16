@@ -9,7 +9,8 @@ from __future__ import annotations
 
 from typing import List, Tuple
 
-from PySide6.QtWidgets import QCheckBox, QFormLayout, QLabel, QWidget
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import QCheckBox, QFormLayout, QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
 from ..theme import COLOR_TEXT_MUTED
 
@@ -77,3 +78,31 @@ def hint(text: str) -> QLabel:
     label.setWordWrap(True)
     label.setStyleSheet(f"color: {COLOR_TEXT_MUTED}; font-size: 9pt;")
     return label
+
+
+def page_header(title: str, subtitle: str = "", trailing: QWidget | None = None) -> QWidget:
+    """The one-line heading every configuration page starts with.
+
+    Tab labels are short by necessity; this is where a page gets to say, in plain
+    Vietnamese, what it is for - which is most of the answer to "what does this
+    parameter even do".
+    """
+    bar = QWidget()
+    lay = QHBoxLayout(bar)
+    lay.setContentsMargins(2, 0, 2, 0)
+    lay.setSpacing(12)
+    block = QVBoxLayout()
+    block.setContentsMargins(0, 0, 0, 0)
+    block.setSpacing(1)
+    lab = QLabel(title)
+    lab.setProperty("class", "pagetitle")
+    block.addWidget(lab)
+    if subtitle:
+        sub = QLabel(subtitle)
+        sub.setProperty("class", "pagesub")
+        sub.setWordWrap(True)
+        block.addWidget(sub)
+    lay.addLayout(block, 1)
+    if trailing is not None:
+        lay.addWidget(trailing, 0, Qt.AlignmentFlag.AlignTop)
+    return bar
