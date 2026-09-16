@@ -90,7 +90,7 @@ def _separator() -> QFrame:
 class MainWindow(QMainWindow):
     def __init__(self, config_manager: ConfigManager) -> None:
         super().__init__()
-        self.setWindowTitle("VisionGuard - Person-in-Area Monitoring (YOLO -> ROI -> Mitsubishi MC Protocol)")
+        self.setWindowTitle("VisionGuard - Person-in-Area Monitoring (AI Camera / YOLO -> Mitsubishi PLC)")
         self.resize(1560, 960)
         self.ctrl = SystemController(config_manager, self)
         s = self.ctrl.settings
@@ -135,6 +135,7 @@ class MainWindow(QMainWindow):
         self.event_monitor.set_regions(self.ctrl.region_mapping.all())
         self.event_monitor.set_events(self.ctrl.camera_events(120))
         self._apply_detection_mode(s.camera.detection_mode)
+        self._update_window_title()
         self._update_camera_buttons(CameraState.DISCONNECTED)
         self._update_workflow()
 
@@ -678,6 +679,7 @@ class MainWindow(QMainWindow):
         self.status_panel.set_ai_camera_mode(ai)
         self.status_panel.set_detection_mode("CAMERA AI" if ai else "PC AI / YOLO")
         self.video.set_placeholder(PLACEHOLDER_AI_CAMERA if ai else PLACEHOLDER_YOLO)
+        self._update_window_title()
         self.tabs.setTabVisible(TAB_EVENT, ai)
         self.tabs.setTabVisible(TAB_AI, not ai)
         self.tabs.setTabVisible(TAB_ROI, not ai)
@@ -701,6 +703,10 @@ class MainWindow(QMainWindow):
                                         "Map its regions in the 'AI Event' tab.")
         self.video.set_display_mode("raw" if ai else self.video._display_mode)
         self._update_workflow()
+
+    def _update_window_title(self) -> None:
+        source = "AI Camera" if self._ai_camera_mode else "PC AI / YOLO"
+        self.setWindowTitle(f"VisionGuard - Person-in-Area Monitoring - {source} -> Mitsubishi PLC")
 
     def _mode_selected_in_tab(self, mode_value: str) -> None:
         """The Camera tab combo changed: apply it straight away so the UI follows."""

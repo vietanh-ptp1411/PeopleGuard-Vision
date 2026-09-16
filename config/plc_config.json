@@ -1,5 +1,5 @@
 {
-  "simulation_mode": true,
+  "simulation_mode": false,
   "signal_mode": "dual_bit",
   "word_output_enabled": true,
   "connection": {
