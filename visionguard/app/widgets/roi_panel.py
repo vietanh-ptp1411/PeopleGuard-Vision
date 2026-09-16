@@ -13,6 +13,7 @@ from ...logic.occupancy_state_machine import OccupancyState
 from ...plc.device_address import is_valid_device
 from ...roi.roi_model import Roi
 from ..theme import COLOR_ERROR, COLOR_OK, COLOR_TEXT_DIM, COLOR_TEXT_MUTED, COLOR_WARN
+from .form_helpers import page_header
 
 
 class RoiPanel(QWidget):
@@ -47,32 +48,40 @@ class RoiPanel(QWidget):
         lay = QVBoxLayout(body)
         lay.setSpacing(8)
 
+        lay.addWidget(page_header("Zones", "Vẽ polygon: người trong vùng sẽ bật bit PLC"))
+
         g_act = QGroupBox("ROI EDITOR")
         gl = QGridLayout(g_act)
-        self.btn_add = QPushButton("Add ROI")
+        self.btn_add = QPushButton("+ Zone")
         self.btn_add.setProperty("class", "primary")
-        self.btn_add_ex = QPushButton("Add Exclusion Zone")
-        self.btn_finish = QPushButton("Finish polygon")
+        self.btn_add_ex = QPushButton("+ Exclusion")
+        self.btn_finish = QPushButton("Finish")
         self.btn_cancel = QPushButton("Cancel")
-        self.btn_edit = QPushButton("Edit ROI (drag vertices)")
+        self.btn_edit = QPushButton("Edit")
         self.btn_edit.setCheckable(True)
-        self.btn_delete = QPushButton("Delete ROI")
-        self.btn_delete.setProperty("class", "danger")
-        self.btn_clear = QPushButton("Clear All ROI")
-        self.btn_save = QPushButton("Save ROI")
+        self.btn_edit.setToolTip("Kéo đỉnh để sửa vùng; Shift+click cạnh để thêm đỉnh")
+        self.btn_delete = QPushButton("Delete")
+        self.btn_delete.setProperty("class", "dangerline")
+        self.btn_clear = QPushButton("Clear all")
+        self.btn_save = QPushButton("Save")
         self.btn_save.setProperty("class", "success")
+        # Two tight rows beat one column of full width buttons: the same actions read as a
+        # toolbar instead of a menu, and the ROI list stays above the fold.
+        for b in (self.btn_add, self.btn_add_ex, self.btn_finish, self.btn_cancel,
+                  self.btn_edit, self.btn_delete, self.btn_clear, self.btn_save):
+            b.setProperty("size", "sm")
         gl.addWidget(self.btn_add, 0, 0)
         gl.addWidget(self.btn_add_ex, 0, 1)
-        gl.addWidget(self.btn_finish, 1, 0)
-        gl.addWidget(self.btn_cancel, 1, 1)
-        gl.addWidget(self.btn_edit, 2, 0, 1, 2)
-        gl.addWidget(self.btn_delete, 3, 0)
-        gl.addWidget(self.btn_clear, 3, 1)
-        gl.addWidget(self.btn_save, 4, 0, 1, 2)
-        self.lbl_hint = QLabel("Left-click on the image to add points, double-click / Enter to close the polygon.")
+        gl.addWidget(self.btn_finish, 0, 2)
+        gl.addWidget(self.btn_cancel, 0, 3)
+        gl.addWidget(self.btn_edit, 1, 0)
+        gl.addWidget(self.btn_delete, 1, 1)
+        gl.addWidget(self.btn_clear, 1, 2)
+        gl.addWidget(self.btn_save, 1, 3)
+        self.lbl_hint = QLabel("Click trái trên hình để thêm điểm, double-click / Enter để đóng polygon.")
         self.lbl_hint.setWordWrap(True)
         self.lbl_hint.setStyleSheet(f"color: {COLOR_TEXT_DIM}; font-size: 9pt;")
-        gl.addWidget(self.lbl_hint, 5, 0, 1, 2)
+        gl.addWidget(self.lbl_hint, 2, 0, 1, 4)
         lay.addWidget(g_act)
 
         g_list = QGroupBox("ROI LIST")
@@ -98,7 +107,7 @@ class RoiPanel(QWidget):
         self.lbl_id = QLabel("-")
         self.edt_name = QLineEdit()
         self.edt_plc = QLineEdit()
-        self.edt_plc.setPlaceholderText("e.g. M200 (optional, include ROI only)")
+        self.edt_plc.setPlaceholderText("ví dụ M200 - không bắt buộc, chỉ cho vùng include")
         self.edt_plc.textChanged.connect(self._validate_plc)
         self.chk_enabled = QCheckBox("Enabled")
         self.btn_apply = QPushButton("Apply to ROI")
@@ -182,13 +191,13 @@ class RoiPanel(QWidget):
             self.btn_edit.setChecked(False)
             self.btn_edit.blockSignals(False)
         if drawing:
-            self.lbl_hint.setText("DRAWING: left-click adds a point, right-click undoes, double-click / Enter / 'Finish polygon' closes it, Esc cancels.")
+            self.lbl_hint.setText("ĐANG VẼ: click trái thêm điểm, click phải hoàn tác, double-click / Enter / 'Finish polygon' để đóng, Esc để huỷ.")
             self.lbl_hint.setStyleSheet(f"color: {COLOR_WARN}; font-size: 9pt;")
         elif mode == "edit":
-            self.lbl_hint.setText("EDIT: click a ROI to select, drag a vertex to move it, Shift+click an edge to insert a vertex, right-click a vertex to remove it, drag inside to move the ROI.")
+            self.lbl_hint.setText("ĐANG SỬA: click để chọn vùng, kéo đỉnh để di chuyển, Shift+click cạnh để thêm đỉnh, click phải lên đỉnh để xoá, kéo bên trong để dời cả vùng.")
             self.lbl_hint.setStyleSheet(f"color: {COLOR_OK}; font-size: 9pt;")
         else:
-            self.lbl_hint.setText("Left-click on the image to add points, double-click / Enter to close the polygon.")
+            self.lbl_hint.setText("Click trái trên hình để thêm điểm, double-click / Enter để đóng polygon.")
             self.lbl_hint.setStyleSheet(f"color: {COLOR_TEXT_DIM}; font-size: 9pt;")
 
     def set_dirty(self, dirty: bool) -> None:
@@ -237,7 +246,7 @@ class RoiPanel(QWidget):
             return
         plc = self.edt_plc.text().strip().upper()
         if plc and not is_valid_device(plc):
-            self.lbl_hint.setText(f"Invalid PLC device '{plc}' (examples: M200, D110)")
+            self.lbl_hint.setText(f"Địa chỉ PLC '{plc}' không hợp lệ (ví dụ: M200, D110)")
             self.lbl_hint.setStyleSheet(f"color: {COLOR_ERROR}; font-size: 9pt;")
             return
         self.fields_changed.emit(r.id, self.edt_name.text().strip() or r.name, plc if r.is_include else "", self.chk_enabled.isChecked())

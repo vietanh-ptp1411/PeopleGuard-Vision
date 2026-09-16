@@ -86,7 +86,7 @@ VisionGuard/
 │  │  ├─ main_window.py            # layout + wiring
 │  │  ├─ theme.py                  # light industrial palette + QSS
 │  │  ├─ controllers/system_controller.py
-│  │  └─ widgets/                  # video_view (ROI editor), workflow_bar (5 bước), status_panel, camera/ai/plc config, roi_panel, io_test, events, log
+│  │  └─ widgets/                  # video_view (ROI editor), chrome (app bar, chip, alert), status_panel, camera/ai/plc config, roi_panel, io_test, events, log
 │  ├─ camera/
 │  │  ├─ base_camera.py            # BaseCamera, Frame, CameraInfo
 │  │  ├─ camera_manager.py         # factory video theo detection mode + scan + SDK availability
@@ -169,12 +169,19 @@ hoặc `run.bat`. Log ghi vào `logs/YYYY-MM-DD.log`, event vào `events/events.
 Giao diện sáng (light industrial), bố cục cố định:
 
 ```
- toolbar    START SYSTEM | STOP SYSTEM | TEST VIDEO | PLC SIMULATION | AREA BANNER | LED x4 | dong ho
- workflow   (1) Camera  >  (2) AI Model  >  (3) ROI Zones  >  (4) PLC  >  (5) Run
- trái       hình camera + ROI editor        |  phải   tab Status / 1 Camera / 2 AI Event / 3 PLC / History
- quick bar  CAMERA: Connect Start Stop  |  ROI: +ROI  +Exclusion  Finish  Edit  Save ROI
- duoi       SYSTEM LOG (auto scroll)           |  status bar: thong bao + canh bao an toan
+ app bar      ◉ VisionGuard · Person-in-Area Monitoring · [AI CAMERA] ············· đồng hồ
+ command bar  START | STOP | PLC SIM ‖ AREA STATUS ‖ chip: CAMERA · AI EVENTS · REGIONS · PLC
+ alert        (chỉ hiện khi có sự cố)  Kênh sự kiện AI: cannot reach 192.168.1.64 …  [Mở tab]
+ trái         LIVE VIEW: tên nguồn + fps · hình camera + ROI editor · thanh Camera / Zones
+ phải         tab Overview / Camera / AI Events / AI Model / Zones / PLC / History
+ dưới         SYSTEM LOG (auto scroll)  |  status bar: thông báo + cảnh báo an toàn
 ```
+
+**Bốn chip trạng thái** trên command bar là chỗ nhìn đầu tiên khi có vấn đề: mỗi chip là một khâu
+(camera, kênh sự kiện AI hoặc model YOLO, vùng, PLC) với đèn màu và một dòng tiếng Việt
+(`Đang truyền hình`, `Chưa vẽ vùng giám sát`, `Đã kết nối 192.168.1.10`…). Bấm vào chip sẽ mở
+đúng tab xử lý khâu đó. Khi một khâu lỗi, **thanh cảnh báo** hiện nguyên văn lý do kèm nút mở tab;
+khi mọi thứ bình thường thanh này biến mất hoàn toàn.
 
 Lăn chuột trên trang cấu hình chỉ cuộn trang, **không làm đổi giá trị** của ô số hay danh sách
 (muốn đổi thì bấm vào ô trước). Đây là lỗi hay gặp làm sai port camera mà không ai biết.
@@ -185,53 +192,39 @@ Mỗi trang cấu hình chỉ hiện những ô thật sự cần, kèm dòng gi
 
 | Tab | Hiện mặc định | Nằm sau ô **Advanced settings** |
 |---|---|---|
-| 1 Camera (AI Camera) | Detection source, Camera brand, IP, Username, Password, Event provider, ON/OFF delay | cổng HTTP/RTSP, HTTPS, kênh stream, RTSP URL, transport, event API path, timeout, health check, clear timeout, line cross hold, đếm người, strict human, 2 lựa chọn fail-safe, auto reconnect |
-| 3 PLC | nút Simulation, IP, Port, thiết bị PERSON và CLEAR | PLC series, data code, network/PC/module number, timeout, retry, auto reconnect, signal mode, các bit phụ, status word, heartbeat, fail-safe |
-| 2 AI Model (YOLO) | Model path, Confidence, Device, containment mode, ON/OFF delay | IoU, image size, tracking, FP16, auto load, intersection threshold, min frames |
+| Camera (AI Camera) | Detection source, Camera brand, IP, Username, Password, Event provider, ON/OFF delay | cổng HTTP/RTSP, HTTPS, kênh stream, RTSP URL, transport, event API path, timeout, health check, clear timeout, line cross hold, đếm người, strict human, 2 lựa chọn fail-safe, auto reconnect |
+| PLC | nút Simulation, IP, Port, thiết bị PERSON và CLEAR | PLC series, data code, network/PC/module number, timeout, retry, auto reconnect, signal mode, các bit phụ, status word, heartbeat, fail-safe |
+| AI Model (YOLO) | Model path, Confidence, Device, containment mode, ON/OFF delay | IoU, image size, tracking, FP16, auto load, intersection threshold, min frames |
 
 Tab **PLC** chia thành 4 trang con: *Connection*, *Devices*, *Manual I/O*, *Memory*. Màn hình I/O test
 trước đây là một tab riêng, nay nằm trong PLC vì nó chính là kiểm tra PLC.
 
-**Thanh 5 bước** ngay dưới toolbar là phần quan trọng nhất khi thao tác: mỗi bước hiện trạng thái
-(`xám` = chưa làm, `xanh dương` = đang làm, `xanh lá ✓` = xong, `vàng/đỏ` = thiếu hoặc lỗi) kèm mô tả
-ngắn, ví dụ *Camera – Streaming*, *ROI Zones – 1 zone(s) + 1 exclusion*, *Run – Press START SYSTEM (F5)*.
-Bấm vào một bước sẽ mở đúng tab tương ứng. Khi cả 5 bước xanh là hệ thống đang giám sát.
+Trạng thái khu vực hiển thị ở 2 chỗ để đọc được từ xa: banner giữa command bar và banner trên hình
+camera — `AREA CLEAR` (xanh lá) / `PERSON DETECTED` (đỏ) / `FAULT` (vàng) / `STARTING…` (xanh dương) /
+`STOPPED` (xám).
 
-Trạng thái khu vực hiển thị đồng thời ở 3 chỗ để đọc được từ xa: banner trên toolbar, banner trên hình
-camera và ô lớn trong tab Status — `AREA CLEAR` (xanh lá) / `PERSON DETECTED` (đỏ) / `FAULT` (vàng) /
-`STARTING…` (xanh dương) / `STOPPED` (xám).
+Ngôn ngữ trong giao diện theo một quy tắc: tên mục, nhãn ô nhập và giá trị trạng thái để nguyên
+dạng kỹ thuật (`IP Address`, `STOPPED`, `MITSUBISHI MC PROTOCOL`), còn mọi câu giải thích, gợi ý và
+cảnh báo đều bằng tiếng Việt.
 
 Toàn bộ màu nằm trong `visionguard/app/theme.py` (token + QSS). Đổi bảng màu ở một chỗ là cả
 ứng dụng đổi theo; màu vẽ lên hình camera nằm riêng trong `VisualizationConfig` của `app_config.json`.
 
-### Chạy thử nhanh bằng video - nút TEST VIDEO
-
-Muốn xem hệ thống chạy ngay mà chưa có camera hay PLC: bấm **▶ TEST VIDEO** trên toolbar (phím tắt **F9**),
-chọn 1 file video có người đi lại. Một cú bấm sẽ tự làm hết:
-
-1. chuyển camera sang **Video File**, bật Loop và phát đúng FPS của file;
-2. nếu **chưa có vùng giám sát nào**, tự tạo vùng mặc định tên *Demo Zone* (khung 8%–92% khung hình) và lưu lại;
-3. nếu **chưa kết nối PLC nào**, tự bật **PLC Simulation** (PLC thật đang kết nối thì giữ nguyên);
-4. nạp model YOLO nếu chưa nạp, mở camera, **START SYSTEM** và chuyển sang tab *Status*.
-
-Sau vài giây cả 5 bước trên thanh workflow chuyển xanh, bounding box hiện trên video, `M100 -> ON` chạy trong
-System Log và bảng PLC MEMORY. Bấm lại nút để đổi sang video khác (hệ thống tự dừng rồi khởi động lại).
-Vùng *Demo Zone* có thể sửa hoặc xoá trong tab *3 ROI* như mọi ROI khác.
-
 ### Quy trình demo (MVP)
 
-Làm theo đúng thứ tự 5 bước trên thanh workflow:
+Làm lần lượt theo 4 chip trạng thái trên command bar:
 
-1. **Camera** – tab *1 Camera* → chọn *Camera Type* (USB / Video File / RTSP …) → **Apply & Save** →
+1. **Camera** – tab *Camera* → chọn *Camera Type* (USB / Video File / RTSP …) → **Apply & Save** →
    **Connect** → **Start**. Nhanh hơn: dùng nút **Connect / Start** ngay dưới khung hình.
-2. **AI Model** – tab *2 AI* → **Load Model** (mặc định tự nạp khi mở app).
-3. **ROI Zones** – nút **+ ROI** dưới khung hình (hoặc tab *3 ROI*) → click từng điểm trên hình →
-   double-click / Enter để đóng polygon. **+ Exclusion** cho vùng loại trừ. Nhấn **Save ROI** để lưu.
-4. **PLC** – tab *4 PLC*: giữ **PLC SIMULATION: ON** để demo, hoặc tắt simulation, nhập IP PLC thật rồi
+   Muốn chạy thử không cần camera thật: chọn **Video File** và trỏ tới một file có người đi lại.
+2. **AI Model** – tab *AI Model* → **Load Model** (mặc định tự nạp khi mở app).
+3. **Zones** – nút **+ Zone** dưới khung hình (hoặc tab *Zones*) → click từng điểm trên hình →
+   double-click / Enter để đóng polygon. **+ Exclusion** cho vùng loại trừ. Nhấn **Save** để lưu.
+4. **PLC** – tab *PLC*: giữ **PLC SIM** bật để demo, hoặc tắt nó, nhập IP PLC thật rồi
    **Connect** / **Test Connection**.
-5. **Run** – **START SYSTEM** (F5) trên toolbar. Dừng bằng **STOP SYSTEM** (F6).
+5. **Run** – **START** (F5) trên command bar. Dừng bằng **STOP** (F6).
 
-Phím tắt: **F5** start, **F6** stop, **F9** test bằng video, **F11** fullscreen.
+Phím tắt: **F5** start, **F6** stop, **F11** fullscreen.
 
 Cửa sổ **mở toàn màn hình (maximized)** sẵn. Nhấn **F11** để chuyển sang fullscreen không viền (hợp cho màn hình HMI đặt tại máy), nhấn F11 lần nữa để quay lại. Kích thước tối thiểu 1195x629 nên chạy được trên mọi màn hình từ 1280x720 trở lên.
 
@@ -239,7 +232,7 @@ Cửa sổ **mở toàn màn hình (maximized)** sẵn. Nhấn **F11** để chu
 
 ### Cấu hình camera
 
-Tab **1 Camera** → *Detection source* = **AI Camera** → chọn *Camera brand*. Trang **AI Camera** cần:
+Tab **Camera** → *Detection source* = **AI Camera** → chọn *Camera brand*. Trang **AI Camera** cần:
 
 | Trường | Ví dụ | Ghi chú |
 |---|---|---|
@@ -288,7 +281,7 @@ Hai tham số quan trọng trong **EVENT LOGIC**:
 
 ### Map vùng của camera sang PLC
 
-Tab **2 AI Event → Regions**. Region id mới xuất hiện tự động khi camera gửi event lần đầu.
+Tab **AI Events → Regions**. Region id mới xuất hiện tự động khi camera gửi event lần đầu.
 
 ```json
 { "regions": [
@@ -300,16 +293,15 @@ Tab **2 AI Event → Regions**. Region id mới xuất hiện tự động khi c
 
 ### Event Monitor và RAW EVENT
 
-Tab **2 AI Event** có 3 trang: **Event Monitor** (bảng sự kiện realtime kèm region, target, thời gian),
+Tab **AI Events** có 3 trang: **Event Monitor** (bảng sự kiện realtime kèm region, target, thời gian),
 **Regions** (map vùng), **RAW EVENT** (payload thô camera gửi). RAW EVENT rất quan trọng khi gặp model camera
 lạ vì mỗi hãng đặt tên event khác nhau. Mật khẩu không bao giờ được ghi ra log hay RAW EVENT.
 
 ### Demo khi chưa có camera AI
 
-Đổi *Event provider* thành **Simulated events**, sang tab **2 AI Event** và bấm **Person Enter / Person Exit /
-Intrusion ON / OFF / Vehicle / Disconnect**. Toàn bộ chuỗi state machine → debounce → PLC chạy thật, chỉ có
-nguồn event là giả. Nút **TEST VIDEO** trong chế độ này cũng tự chuyển sang Simulated events và phát video
-file làm hình nền.
+Đổi *Event provider* thành **Simulated events**, sang tab **AI Events → Simulate** và bấm **Person Enter /
+Person Exit / Intrusion ON / OFF / Vehicle / Disconnect**. Toàn bộ chuỗi state machine → debounce → PLC chạy
+thật, chỉ có nguồn event là giả. Muốn có hình nền: chọn *Camera Type* = **Video File** ở tab Camera.
 
 ## 5. Camera
 
@@ -495,8 +487,8 @@ ghi ngay ra JSON; khi đóng app cũng lưu.
 Bộ unit test đã được gỡ khỏi project theo yêu cầu (vẫn còn trong lịch sử git nếu cần lấy lại).
 Cách kiểm tra nhanh bằng chính ứng dụng:
 
-**Không cần camera, không cần PLC** – tab *1 Camera* đặt `Event provider = Simulated events`,
-tab *4 PLC* giữ `PLC SIMULATION: ON`, nhấn **START SYSTEM**, rồi sang tab *2 AI Event* bấm:
+**Không cần camera, không cần PLC** – tab *Camera* đặt `Event provider = Simulated events`,
+tab *PLC* giữ `PLC SIM` bật, nhấn **START**, rồi sang tab *AI Events* bấm:
 
 | Bấm | Phải thấy |
 |---|---|
@@ -506,11 +498,11 @@ tab *4 PLC* giữ `PLC SIMULATION: ON`, nhấn **START SYSTEM**, rồi sang tab 
 | **Disconnect** | FAULT, `M104 -> ON`, `M100` giữ nguyên (không CLEAR giả) |
 | **Reconnect** | hết FAULT |
 
-**Có camera AI thật** – nhập IP/user/password ở tab *1 Camera*, bấm lần lượt **Test Camera** →
-**Test RTSP** → **Test Event**, rồi đi vào vùng giám sát và xem tab *2 AI Event*. Nếu không có event
+**Có camera AI thật** – nhập IP/user/password ở tab *Camera*, bấm lần lượt **Test Camera** →
+**Test RTSP** → **Test Event**, rồi đi vào vùng giám sát và xem tab *AI Events*. Nếu không có event
 nào, mở trang **RAW EVENT** để biết camera có gửi gì không.
 
-**Có PLC thật** – tab *4 PLC* tắt simulation, nhập IP/port, **Test Connection**, rồi dùng tab *I/O*
+**Có PLC thật** – tab *PLC* tắt simulation, nhập IP/port, **Test Connection**, rồi dùng tab *PLC → Manual I/O*
 để ghi thử `M100 ON/OFF` trước khi chạy AI.
 
 **PLC giả lập qua TCP** (không cần PLC): `python tools/mc_plc_simulator.py --port 5000`, sau đó tắt

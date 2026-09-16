@@ -18,7 +18,7 @@ from PySide6.QtWidgets import (QCheckBox, QComboBox, QDoubleSpinBox, QFormLayout
 from ...config.schemas import FaultPersonOutput, FrameFormat, PlcConfig, SignalMode
 from ...plc.device_address import is_valid_device
 from ..theme import COLOR_ERROR, COLOR_OK, COLOR_TEXT_DIM
-from .form_helpers import AdvancedSection, advanced_checkbox, hint
+from .form_helpers import AdvancedSection, advanced_checkbox, hint, page_header
 from .io_test_widget import IoTestWidget
 
 PLC_SERIES = ["iQ-F (FX5U)", "iQ-R", "Q Series", "L Series", "Other MC 3E"]
@@ -64,15 +64,18 @@ class PlcConfigWidget(QWidget):
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(6)
 
-        head = QHBoxLayout()
         self.chk_advanced = advanced_checkbox(self.advanced)
-        head.addWidget(self.chk_advanced)
-        head.addStretch(1)
         self.btn_apply = QPushButton("Apply && Save")
         self.btn_apply.setProperty("class", "primary")
         self.btn_apply.setProperty("size", "sm")
-        head.addWidget(self.btn_apply)
-        lay.addLayout(head)
+        actions = QWidget()
+        al = QHBoxLayout(actions)
+        al.setContentsMargins(0, 0, 0, 0)
+        al.setSpacing(10)
+        al.addWidget(self.chk_advanced)
+        al.addWidget(self.btn_apply)
+        lay.addWidget(page_header("PLC Mitsubishi", "Kết nối MC Protocol 3E và bit gửi sang PLC",
+                                  actions))
 
         self.tabs = QTabWidget()
         self.tabs.addTab(self._build_connection(), "Connection")
@@ -208,7 +211,7 @@ class PlcConfigWidget(QWidget):
         self.advanced.row(fm, self.lbl_word_hint)
         lay.addWidget(g_map)
 
-        g_hb = QGroupBox("HEARTBEAT & FAIL-SAFE")
+        g_hb = QGroupBox("HEARTBEAT && FAIL-SAFE")
         fh = QFormLayout(g_hb)
         self.chk_hb = QCheckBox("Bật heartbeat (bit đảo 0/1)")
         self.spn_hb = QSpinBox()

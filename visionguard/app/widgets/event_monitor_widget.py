@@ -15,6 +15,7 @@ from ...config.region_mapping import RegionMapping
 from ...logic.camera_event_state_machine import ZoneState
 from ...plc.device_address import is_valid_device
 from ..theme import COLOR_ERROR, COLOR_OK, COLOR_TEXT, COLOR_TEXT_DIM, COLOR_TEXT_MUTED, COLOR_WARN
+from .form_helpers import page_header
 
 MAX_ROWS = 300
 
@@ -71,6 +72,8 @@ class EventMonitorWidget(QWidget):
         lay = QVBoxLayout(body)
         lay.setSpacing(8)
 
+        lay.addWidget(page_header("AI Events", "Sự kiện camera gửi về và ánh xạ vùng sang bit PLC"))
+
         # ---------------------------------------------------------- channel header
         header_card = QWidget()
         head = QVBoxLayout(header_card)
@@ -114,8 +117,8 @@ class EventMonitorWidget(QWidget):
         lay.setContentsMargins(8, 8, 8, 8)
         lay.setSpacing(8)
 
-        info = QLabel("Feed the whole chain (state machine -> debounce -> PLC) with events you "
-                      "trigger yourself. Everything downstream behaves exactly as with a real camera.")
+        info = QLabel("Tự tạo sự kiện để chạy thử cả chuỗi: state machine -> debounce -> PLC. "
+                      "Mọi khâu phía sau hoạt động y như khi có camera thật.")
         info.setWordWrap(True)
         info.setProperty("class", "hint")
         lay.addWidget(info)
@@ -136,20 +139,21 @@ class EventMonitorWidget(QWidget):
             ("Intrusion ON", "intrusion_on", "success"),
             ("Intrusion OFF", "intrusion_off", ""),
             ("Vehicle (ignored)", "vehicle", ""),
-            ("Camera Disconnect", "disconnect", "danger"),
+            ("Camera Disconnect", "disconnect", "dangerline"),
             ("Camera Reconnect", "reconnect", ""),
         ]
         for i, (label, action, cls) in enumerate(buttons):
             btn = QPushButton(label)
             if cls:
                 btn.setProperty("class", cls)
-            btn.setMinimumHeight(34)
+            btn.setProperty("size", "sm")
+            btn.setMinimumHeight(28)
             btn.clicked.connect(lambda _=False, a=action: self.simulate_requested.emit(a, self._sim_region()))
             grid.addWidget(btn, i // 2, i % 2)
         lay.addLayout(grid)
 
-        self.lbl_sim_hint = QLabel("These buttons need the event provider set to 'Simulated events' "
-                                   "in the Camera tab.")
+        self.lbl_sim_hint = QLabel("Các nút này chỉ dùng được khi Event provider ở tab Camera đang để "
+                                   "'Simulated events'.")
         self.lbl_sim_hint.setWordWrap(True)
         self.lbl_sim_hint.setProperty("class", "hint")
         lay.addWidget(self.lbl_sim_hint)
@@ -187,8 +191,8 @@ class EventMonitorWidget(QWidget):
         page = QWidget()
         lay = QVBoxLayout(page)
         lay.setContentsMargins(6, 6, 6, 6)
-        info = QLabel("Detection zones live inside the camera. Map each camera region id to a name "
-                      "and the PLC bit it should drive. New regions appear here automatically.")
+        info = QLabel("Vùng phát hiện nằm trong camera. Gán mỗi region id của camera với một tên và "
+                      "một bit PLC. Vùng mới sẽ tự xuất hiện ở đây khi camera gửi sự kiện.")
         info.setWordWrap(True)
         info.setProperty("class", "hint")
         lay.addWidget(info)
@@ -216,7 +220,7 @@ class EventMonitorWidget(QWidget):
         form.addWidget(self.edt_region_name, 0, 3)
         form.addWidget(QLabel("PLC device"), 1, 0)
         self.edt_region_plc = QLineEdit()
-        self.edt_region_plc.setPlaceholderText("e.g. M200")
+        self.edt_region_plc.setPlaceholderText("ví dụ M200")
         self.edt_region_plc.textChanged.connect(self._validate_device)
         form.addWidget(self.edt_region_plc, 1, 1)
         self.chk_region_enabled = QCheckBox("Enabled")
@@ -245,8 +249,8 @@ class EventMonitorWidget(QWidget):
         page = QWidget()
         lay = QVBoxLayout(page)
         lay.setContentsMargins(6, 6, 6, 6)
-        info = QLabel("Exactly what the camera sent, before any interpretation. Every model words its "
-                      "alarms differently - use this to see event type, region id and target type.")
+        info = QLabel("Đúng nguyên văn camera gửi về, trước khi phần mềm diễn giải. Mỗi dòng camera đặt tên "
+                      "cảnh báo một kiểu - xem ở đây để biết event type, region id và target.")
         info.setWordWrap(True)
         info.setProperty("class", "hint")
         lay.addWidget(info)
@@ -290,7 +294,7 @@ class EventMonitorWidget(QWidget):
         if index >= 0:
             self.inner_tabs.setTabText(index, "Simulate" if available else "Simulate (off)")
             self.inner_tabs.setTabToolTip(index, "" if available else
-                                          "Set the event provider to 'Simulated events' in the Camera tab")
+                                          "Đổi Event provider sang 'Simulated events' ở tab Camera")
 
     def add_event(self, event: CameraEvent) -> None:
         self.table.insertRow(0)

@@ -1,64 +1,58 @@
 """MainWindow: layout + signal wiring between widgets and the SystemController.
 
-Layout (light industrial):
+    ┌ app bar ── ◉ VisionGuard · Person-in-Area Monitoring · [AI CAMERA] ····· clock ─┐
+    ├ command bar ─ START / STOP · PLC SIM │ AREA BANNER │ chips: camera · events · … ┤
+    ├ alert strip ─ (hidden while nothing is wrong) ──────────────────────────────────┤
+    │ ┌ live view card ───────────────────┐ ┌ side panel ──────────────────────────┐  │
+    │ │ LIVE VIEW · source · fps          │ │ Overview / Camera / AI Events /      │  │
+    │ │ image + ROI editor                │ │ AI Model / Zones / PLC / History     │  │
+    │ │ camera + zone actions             │ │                                      │  │
+    │ └───────────────────────────────────┘ └──────────────────────────────────────┘  │
+    ├ system log ────────────────────────────────────────────────────────────────────┤
+    └ status bar ─ message ······················· safety note ──────────────────────┘
 
-    ┌ toolbar ─ START / STOP · Simulate PLC · AREA banner · LEDs · clock ────────┐
-    ├ workflow ─ (1) Camera > (2) AI > (3) ROI > (4) PLC > (5) Run ──────────────┤
-    │ ┌ video ───────────────────────────┐ ┌ tabs ───────────────────────────┐   │
-    │ │ live image + ROI editor          │ │ Status / Camera / AI / ROI /    │   │
-    │ ├ quick bar: camera + ROI actions ─┤ │ PLC / I/O Test / Events         │   │
-    │ └──────────────────────────────────┘ └─────────────────────────────────┘   │
-    ├ system log ───────────────────────────────────────────────────────────────┤
-    └ status bar ─ message · safety note ───────────────────────────────────────┘
+The chips on the command bar carry what the old five-step workflow strip used to: each
+one is a subsystem's health, and clicking it opens the tab that can fix it.
 """
 from __future__ import annotations
 
 import logging
-from copy import deepcopy
 from datetime import datetime
-from pathlib import Path
 from typing import Dict
 
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QAction, QCloseEvent, QKeySequence
-from PySide6.QtWidgets import (QFileDialog, QFrame, QHBoxLayout, QLabel, QMainWindow, QMessageBox, QPushButton,
-                               QSizePolicy, QSplitter, QTabWidget, QToolBar, QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QFrame, QHBoxLayout, QLabel, QMainWindow, QMessageBox, QPushButton, QSplitter,
+                               QTabWidget, QVBoxLayout, QWidget)
 
 from ..camera.events.camera_event import CameraEvent
-from ..camera.video_camera import VIDEO_EXTENSIONS
 from ..config.config_manager import ConfigManager
-from ..config.schemas import CameraType, DetectionMode, EventProviderType
-from ..logic.camera_event_state_machine import ZoneState
+from ..config.schemas import DetectionMode, EventProviderType
 from ..logic.occupancy_state_machine import OccupancyState
 from ..roi.roi_model import RoiType
 from ..utils.logger import try_import_qt_handler
 from ..workers.camera_worker import CameraState
 from .controllers.system_controller import SystemController
-from .theme import (COLOR_BORDER_STRONG, COLOR_TEXT_DIM, COLOR_TEXT_MUTED, contrast_text, status_caption,
-                    status_color)
+from .theme import COLOR_TEXT_MUTED, status_caption, status_color
 from .widgets.ai_config_widget import AIConfigWidget
 from .widgets.camera_config_widget import CameraConfigWidget
+from .widgets.chrome import (AlertStrip, AppBar, AreaBanner, ElidedLabel, StateChip, caption,
+                            separator)
 from .widgets.event_monitor_widget import EventMonitorWidget
 from .widgets.events_widget import EventsWidget
-from .widgets.led_indicator import LedIndicator
 from .widgets.log_widget import LogWidget
 from .widgets.plc_config_widget import PlcConfigWidget
 from .widgets.roi_panel import RoiPanel
 from .widgets.status_panel import StatusPanel
 from .widgets.video_view import PLACEHOLDER_AI_CAMERA, PLACEHOLDER_YOLO, VideoView
-from .widgets.workflow_bar import WorkflowBar
 
 log = logging.getLogger("UI")
 
-SAFETY_NOTE_SHORT = "NOT a safety-rated protective device - monitoring only"
+SAFETY_NOTE_SHORT = "Thiết bị giám sát - KHÔNG phải thiết bị an toàn đạt chuẩn"
 SAFETY_NOTE = ("Monitoring system only - NOT a safety-rated protective device. "
                "Use certified safety PLC / sensors for personnel protection.")
 
 TAB_STATUS, TAB_CAMERA, TAB_EVENT, TAB_AI, TAB_ROI, TAB_PLC, TAB_HISTORY = range(7)
-#: zone created automatically by the video demo when the user has not drawn one yet
-DEMO_ROI_POINTS = [(0.08, 0.08), (0.92, 0.08), (0.92, 0.92), (0.08, 0.92)]
-STEP_TO_TAB = {0: TAB_CAMERA, 1: TAB_AI, 2: TAB_ROI, 3: TAB_PLC, 4: TAB_STATUS}
-STEP_TO_TAB_AI = {0: TAB_CAMERA, 1: TAB_EVENT, 2: TAB_EVENT, 3: TAB_PLC, 4: TAB_STATUS}
 
 
 def _button(text: str, cls: str = "", size: str = "", tooltip: str = "") -> QPushButton:
@@ -72,29 +66,14 @@ def _button(text: str, cls: str = "", size: str = "", tooltip: str = "") -> QPus
     return b
 
 
-def _section(text: str) -> QLabel:
-    lab = QLabel(text)
-    lab.setProperty("class", "section")
-    return lab
-
-
-def _separator() -> QFrame:
-    f = QFrame()
-    f.setFixedWidth(1)
-    f.setMinimumHeight(26)
-    f.setStyleSheet(f"background: {COLOR_BORDER_STRONG}; border: none;")
-    return f
-
-
 class MainWindow(QMainWindow):
     def __init__(self, config_manager: ConfigManager) -> None:
         super().__init__()
-        self.setWindowTitle("VisionGuard - Person-in-Area Monitoring (AI Camera / YOLO -> Mitsubishi PLC)")
-        self.resize(1560, 960)
+        self.resize(1560, 950)
         self.ctrl = SystemController(config_manager, self)
         s = self.ctrl.settings
 
-        # ---------------------------------------------------------- state mirrors (for the workflow bar)
+        # ---------------------------------------------------------- state mirrors (for the chips)
         self._camera_state = CameraState.DISCONNECTED
         self._model_loaded = False
         self._model_error = ""
@@ -117,10 +96,11 @@ class MainWindow(QMainWindow):
         self.events_widget = EventsWidget()
         self.event_monitor = EventMonitorWidget()
         self.log_widget = LogWidget()
-        self.workflow = WorkflowBar()
+        # the manual I/O screen lives inside the PLC tab: it is PLC testing, not a topic of its own
+        self.io_test = self.plc_cfg.io_test
 
-        self._build_toolbar()
         self._build_layout()
+        self._build_shortcuts()
         self._wire()
         self._attach_log_handler()
 
@@ -132,79 +112,62 @@ class MainWindow(QMainWindow):
         self.status_panel.set_heartbeat(None, s.plc.heartbeat.enabled)
         self.event_monitor.set_regions(self.ctrl.region_mapping.all())
         self.event_monitor.set_events(self.ctrl.camera_events(120))
+        self.btn_sim.setChecked(s.plc.simulation_mode)
+        self._style_sim_button(s.plc.simulation_mode)
         self._apply_detection_mode(s.camera.detection_mode)
+        self.lbl_source.setText(s.camera.describe_source())
         self._update_window_title()
         self._update_camera_buttons(CameraState.DISCONNECTED)
-        self._update_workflow()
+        self._refresh_status()
 
-    # ================================================================== toolbar
-    def _build_toolbar(self) -> None:
-        tb = QToolBar("System")
-        tb.setMovable(False)
-        tb.setFloatable(False)
-        self.addToolBar(tb)
-
-        self.btn_start = _button("▶  START SYSTEM", "success", "xl", "Bắt đầu giám sát (F5)")
-        self.btn_stop = _button("■  STOP SYSTEM", "danger", "xl", "Dừng giám sát (F6)")
-        self.btn_stop.setEnabled(False)
-        tb.addWidget(self.btn_start)
-        tb.addWidget(self.btn_stop)
-        tb.addSeparator()
-
-        self.btn_demo = _button("▶  TEST VIDEO", "primary", "",
-                                "Chọn 1 file video và chạy thử cả hệ thống: camera + AI + ROI + PLC mô phỏng (F9)")
-        self.btn_demo.setMinimumHeight(34)
-        tb.addWidget(self.btn_demo)
-
-        self.btn_sim = _button("PLC SIMULATION", "", "", "Bật: không cần PLC thật, mọi tín hiệu ghi vào bộ nhớ ảo")
-        self.btn_sim.setCheckable(True)
-        self.btn_sim.setMinimumHeight(34)
-        self.btn_sim.setChecked(self.ctrl.settings.plc.simulation_mode)
-        self._style_sim_button(self.btn_sim.isChecked())
-        tb.addWidget(self.btn_sim)
-        tb.addSeparator()
-
-        self.lbl_toolbar_area = QLabel(status_caption("STOPPED"))
-        self.lbl_toolbar_area.setMinimumWidth(300)
-        self.lbl_toolbar_area.setMinimumHeight(38)
-        self.lbl_toolbar_area.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        tb.addWidget(self.lbl_toolbar_area)
-        tb.addSeparator()
-
-        leds = QWidget()
-        leds.setProperty("class", "transparent")
-        hl = QHBoxLayout(leds)
-        hl.setContentsMargins(6, 0, 6, 0)
-        hl.setSpacing(5)
-        self.led_system = LedIndicator()
-        self.led_camera = LedIndicator()
-        self.led_ai = LedIndicator()
-        self.led_plc = LedIndicator()
-        for led, name, tip in ((self.led_system, "SYSTEM", "Trạng thái hệ thống"),
-                               (self.led_camera, "CAMERA", "Kết nối camera"),
-                               (self.led_ai, "AI", "Model YOLO / detection"),
-                               (self.led_plc, "PLC", "Kết nối PLC")):
-            led.setToolTip(tip)
-            hl.addWidget(led)
-            lab = QLabel(name)
-            lab.setStyleSheet(f"color: {COLOR_TEXT_DIM}; font-size: 8.5pt; font-weight: 700; letter-spacing: 0.5px;")
-            lab.setToolTip(tip)
-            hl.addWidget(lab)
-            hl.addSpacing(10)
-        tb.addWidget(leds)
-
-        spacer = QWidget()
-        spacer.setProperty("class", "transparent")
-        spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
-        tb.addWidget(spacer)
-        self.lbl_clock = QLabel("")
-        self.lbl_clock.setStyleSheet(f"color: {COLOR_TEXT_DIM}; font-size: 9.5pt;")
-        tb.addWidget(self.lbl_clock)
+    # ================================================================== chrome
+    def _build_app_bar(self) -> QWidget:
+        self.appbar = AppBar()
         clock = QTimer(self)
         clock.timeout.connect(self._update_clock)
         clock.start(1000)
         self._update_clock()
+        return self.appbar
 
+    def _build_command_bar(self) -> QWidget:
+        bar = QFrame()
+        bar.setProperty("class", "card")
+        lay = QHBoxLayout(bar)
+        lay.setContentsMargins(12, 9, 12, 9)
+        lay.setSpacing(10)
+
+        self.btn_start = _button("▶  START", "success", "xl", "Bắt đầu giám sát (F5)")
+        self.btn_stop = _button("■  STOP", "danger", "xl", "Dừng giám sát (F6)")
+        self.btn_stop.setEnabled(False)
+        self.btn_start.setMinimumWidth(104)
+        self.btn_stop.setMinimumWidth(98)
+        lay.addWidget(self.btn_start)
+        lay.addWidget(self.btn_stop)
+
+        self.btn_sim = _button("PLC SIM", "", "",
+                               "Bật: không cần PLC thật, mọi tín hiệu ghi vào bộ nhớ ảo của phần mềm")
+        self.btn_sim.setCheckable(True)
+        self.btn_sim.setMinimumHeight(38)
+        self.btn_sim.setMinimumWidth(86)
+        lay.addWidget(self.btn_sim)
+
+        lay.addWidget(separator(length=38))
+
+        self.banner = AreaBanner()
+        lay.addWidget(self.banner)
+
+        lay.addWidget(separator(length=38))
+
+        self.chip_camera = StateChip("CAMERA")
+        self.chip_detect = StateChip("AI EVENTS")
+        self.chip_zones = StateChip("REGIONS")
+        self.chip_plc = StateChip("PLC")
+        for chip in (self.chip_camera, self.chip_detect, self.chip_zones, self.chip_plc):
+            chip.setMaximumWidth(250)
+            lay.addWidget(chip, 1)
+        return bar
+
+    def _build_shortcuts(self) -> None:
         act_start = QAction("Start system", self)
         act_start.setShortcut(QKeySequence("F5"))
         act_start.triggered.connect(self.ctrl.start_system)
@@ -214,64 +177,36 @@ class MainWindow(QMainWindow):
         act_full = QAction("Toggle fullscreen", self)
         act_full.setShortcut(QKeySequence("F11"))
         act_full.triggered.connect(self.toggle_fullscreen)
-        act_demo = QAction("Test with a video file", self)
-        act_demo.setShortcut(QKeySequence("F9"))
-        act_demo.triggered.connect(self.run_video_demo)
-        self.addActions([act_start, act_stop, act_full, act_demo])
+        self.addActions([act_start, act_stop, act_full])
 
     def _style_sim_button(self, on: bool) -> None:
-        self.btn_sim.setText("PLC SIMULATION: ON" if on else "PLC SIMULATION: OFF")
+        self.btn_sim.setText("PLC SIM: ON" if on else "PLC SIM")
+        self.appbar.set_simulation(on)
 
     # ================================================================== layout
     def _build_layout(self) -> None:
         central = QWidget()
         outer = QVBoxLayout(central)
-        outer.setContentsMargins(8, 8, 8, 6)
-        outer.setSpacing(8)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+        outer.addWidget(self._build_app_bar())
 
-        wf_card = QFrame()
-        wf_card.setProperty("class", "card")
-        wf_lay = QHBoxLayout(wf_card)
-        wf_lay.setContentsMargins(8, 7, 8, 7)
-        wf_lay.addWidget(self.workflow)
-        outer.addWidget(wf_card)
+        body = QWidget()
+        body_lay = QVBoxLayout(body)
+        body_lay.setContentsMargins(10, 10, 10, 8)
+        body_lay.setSpacing(9)
+        body_lay.addWidget(self._build_command_bar())
 
-        # ---------------- left: video + quick actions
-        left = QWidget()
-        ll = QVBoxLayout(left)
-        ll.setContentsMargins(0, 0, 0, 0)
-        ll.setSpacing(6)
-        video_card = QFrame()
-        video_card.setProperty("class", "card")
-        vl = QVBoxLayout(video_card)
-        vl.setContentsMargins(3, 3, 3, 3)
-        vl.addWidget(self.video)
-        ll.addWidget(video_card, 1)
-        ll.addWidget(self._build_quick_bar())
-
-        # ---------------- right: tabs
-        self.tabs = QTabWidget()
-        self.tabs.addTab(self.status_panel, "Status")
-        self.tabs.addTab(self.camera_cfg, "1 Camera")
-        self.tabs.addTab(self.event_monitor, "2 AI Event")
-        self.tabs.addTab(self.ai_cfg, "2 AI Model")
-        self.tabs.addTab(self.roi_panel, "3 ROI")
-        self.tabs.addTab(self.plc_cfg, "4 PLC")
-        self.tabs.addTab(self.events_widget, "History")
-        # the manual I/O screen lives inside the PLC tab: it is PLC testing, not a topic of its own
-        self.io_test = self.plc_cfg.io_test
-        self.tabs.setMinimumWidth(430)
-        self.tabs.setDocumentMode(True)
-        self.tabs.tabBar().setExpanding(False)
-        self.tabs.tabBar().setElideMode(Qt.TextElideMode.ElideNone)
-        self.tabs.tabBar().setUsesScrollButtons(False)
+        self.alert = AlertStrip()
+        body_lay.addWidget(self.alert)
 
         hsplit = QSplitter(Qt.Orientation.Horizontal)
-        hsplit.addWidget(left)
-        hsplit.addWidget(self.tabs)
+        hsplit.addWidget(self._build_live_card())
+        hsplit.addWidget(self._build_side_panel())
         hsplit.setStretchFactor(0, 3)
         hsplit.setStretchFactor(1, 1)
-        hsplit.setSizes([990, 510])
+        hsplit.setSizes([1000, 500])
+        hsplit.setChildrenCollapsible(False)
 
         log_card = QFrame()
         log_card.setProperty("class", "card")
@@ -284,48 +219,99 @@ class MainWindow(QMainWindow):
         vsplit.addWidget(log_card)
         vsplit.setStretchFactor(0, 6)
         vsplit.setStretchFactor(1, 1)
-        vsplit.setSizes([740, 175])
-        outer.addWidget(vsplit, 1)
+        vsplit.setSizes([780, 150])
+        vsplit.setChildrenCollapsible(False)
+        body_lay.addWidget(vsplit, 1)
+
+        outer.addWidget(body, 1)
         self.setCentralWidget(central)
 
         # ---------------- status bar
         self.lbl_safety = QLabel("⚠  " + SAFETY_NOTE_SHORT)
         self.lbl_safety.setStyleSheet(f"color: {COLOR_TEXT_MUTED}; font-size: 9pt;")
         self.lbl_safety.setToolTip(SAFETY_NOTE)
-        self.lbl_safety.setMinimumWidth(0)
         self.statusBar().addPermanentWidget(self.lbl_safety)
-        self.statusBar().showMessage("Ready")
+        self.statusBar().showMessage("Sẵn sàng")
+
+    def _build_live_card(self) -> QWidget:
+        """The video, with a header that names the source and a footer that acts on it."""
+        card = QFrame()
+        card.setProperty("class", "card")
+        lay = QVBoxLayout(card)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(0)
+
+        head = QFrame()
+        head.setProperty("class", "cardhead")
+        hl = QHBoxLayout(head)
+        hl.setContentsMargins(12, 7, 12, 7)
+        hl.setSpacing(10)
+        hl.addWidget(caption("LIVE VIEW"))
+        self.lbl_source = ElidedLabel("-")
+        self.lbl_source.setProperty("class", "muted")
+        hl.addWidget(self.lbl_source, 1)
+        self.lbl_fps = QLabel("")
+        self.lbl_fps.setProperty("class", "muted")
+        hl.addWidget(self.lbl_fps)
+        lay.addWidget(head)
+
+        video_wrap = QWidget()
+        video_wrap.setProperty("class", "transparent")
+        wl = QVBoxLayout(video_wrap)
+        wl.setContentsMargins(1, 0, 1, 0)
+        wl.addWidget(self.video)
+        lay.addWidget(video_wrap, 1)
+
+        lay.addWidget(self._build_quick_bar())
+        return card
+
+    def _build_side_panel(self) -> QWidget:
+        self.tabs = QTabWidget()
+        self.tabs.addTab(self.status_panel, "Overview")
+        self.tabs.addTab(self.camera_cfg, "Camera")
+        self.tabs.addTab(self.event_monitor, "AI Events")
+        self.tabs.addTab(self.ai_cfg, "AI Model")
+        self.tabs.addTab(self.roi_panel, "Zones")
+        self.tabs.addTab(self.plc_cfg, "PLC")
+        self.tabs.addTab(self.events_widget, "History")
+        self.tabs.setMinimumWidth(420)
+        self.tabs.setDocumentMode(True)
+        self.tabs.tabBar().setExpanding(False)
+        self.tabs.tabBar().setElideMode(Qt.TextElideMode.ElideNone)
+        self.tabs.tabBar().setUsesScrollButtons(False)
+        return self.tabs
 
     def _build_quick_bar(self) -> QWidget:
         bar = QFrame()
         bar.setProperty("class", "toolbar")
         lay = QHBoxLayout(bar)
-        lay.setContentsMargins(10, 7, 10, 7)
-        lay.setSpacing(7)
+        lay.setContentsMargins(12, 8, 12, 8)
+        lay.setSpacing(6)
 
-        lay.addWidget(_section("CAMERA"))
+        lay.addWidget(caption("CAMERA"))
         self.btn_q_connect = _button("Connect", "", "sm", "Kết nối camera đang chọn ở tab Camera")
         self.btn_q_start = _button("Start", "success", "sm", "Bật luồng hình")
         self.btn_q_stop = _button("Stop", "", "sm", "Dừng luồng hình")
         for b in (self.btn_q_connect, self.btn_q_start, self.btn_q_stop):
             lay.addWidget(b)
-        lay.addWidget(_separator())
+        lay.addSpacing(6)
+        lay.addWidget(separator())
+        lay.addSpacing(6)
 
-        lay.addWidget(_section("ROI"))
-        self.btn_q_add = _button("+ ROI", "primary", "sm", "Vẽ vùng giám sát: click từng điểm, double-click để đóng")
+        lay.addWidget(caption("ZONES"))
+        self.btn_q_add = _button("+ Zone", "primary", "sm", "Vẽ vùng giám sát: click từng điểm, double-click để đóng")
         self.btn_q_ex = _button("+ Exclusion", "", "sm", "Vẽ vùng loại trừ (người trong vùng này không tính)")
         self.btn_q_finish = _button("Finish", "", "sm", "Đóng polygon đang vẽ (Enter)")
         self.btn_q_edit = _button("Edit", "", "sm", "Kéo đỉnh để sửa vùng; Shift+click cạnh để thêm đỉnh")
         self.btn_q_edit.setCheckable(True)
-        self.btn_q_save = _button("Save ROI", "success", "sm", "Lưu cấu hình ROI ra config/roi_config.json")
+        self.btn_q_save = _button("Save", "success", "sm", "Lưu cấu hình vùng ra config/roi_config.json")
         self.btn_q_finish.setEnabled(False)
         for b in (self.btn_q_add, self.btn_q_ex, self.btn_q_finish, self.btn_q_edit, self.btn_q_save):
             lay.addWidget(b)
-        lay.addWidget(_separator())
+        lay.addSpacing(10)
 
-        self.lbl_video_hint = QLabel("Tip: draw a zone (step 3), then START SYSTEM")
+        self.lbl_video_hint = ElidedLabel("")
         self.lbl_video_hint.setStyleSheet(f"color: {COLOR_TEXT_MUTED}; font-size: 9pt;")
-        self.lbl_video_hint.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         lay.addWidget(self.lbl_video_hint, 1)
         return bar
 
@@ -343,16 +329,21 @@ class MainWindow(QMainWindow):
         c = self.ctrl
         self.btn_start.clicked.connect(c.start_system)
         self.btn_stop.clicked.connect(c.stop_system)
-        self.btn_demo.clicked.connect(self.run_video_demo)
         self.btn_sim.toggled.connect(self._sim_toggled_toolbar)
-        self.workflow.step_clicked.connect(self._workflow_clicked)
+        self.alert.action_clicked.connect(self._open_alert_tab)
+        self.chip_camera.clicked.connect(lambda: self.tabs.setCurrentIndex(TAB_CAMERA))
+        self.chip_detect.clicked.connect(
+            lambda: self.tabs.setCurrentIndex(TAB_EVENT if self._ai_camera_mode else TAB_AI))
+        self.chip_zones.clicked.connect(
+            lambda: self.tabs.setCurrentIndex(TAB_EVENT if self._ai_camera_mode else TAB_ROI))
+        self.chip_plc.clicked.connect(lambda: self.tabs.setCurrentIndex(TAB_PLC))
 
         # controller -> UI
         c.frame_ready.connect(self.video.set_frame)
         c.result_ready.connect(self._on_result)
         c.camera_state.connect(self._on_camera_state)
-        c.camera_fps.connect(self.status_panel.set_fps_camera)
-        c.camera_info.connect(lambda info: self.camera_cfg.set_status(info.summary(), ok=True))
+        c.camera_fps.connect(self._on_camera_fps)
+        c.camera_info.connect(self._on_camera_info)
         c.devices_scanned.connect(self.camera_cfg.set_devices)
         c.video_position.connect(self.camera_cfg.set_video_position)
         c.model_status.connect(self._on_model_status)
@@ -379,6 +370,7 @@ class MainWindow(QMainWindow):
         # camera tab
         cc = self.camera_cfg
         cc.config_applied.connect(c.apply_camera_config)
+        cc.config_applied.connect(lambda cfg: self.lbl_source.setText(cfg.describe_source()))
         cc.connect_requested.connect(c.camera_connect)
         cc.disconnect_requested.connect(c.camera_disconnect)
         cc.start_requested.connect(c.camera_start)
@@ -454,63 +446,6 @@ class MainWindow(QMainWindow):
         self.btn_q_edit.toggled.connect(v.set_edit_mode)
         self.btn_q_save.clicked.connect(self._save_rois)
 
-    # ================================================================== one-click video demo
-    def run_video_demo(self) -> None:
-        """Pick a video file, then bring the whole chain up on it in one go.
-
-        Camera -> YOLO -> ROI -> debounce -> PLC. Anything still missing is filled in:
-        a default monitored zone when none is drawn, and PLC simulation when no PLC is connected.
-        """
-        pattern = " ".join(f"*{e}" for e in VIDEO_EXTENSIONS)
-        path, _ = QFileDialog.getOpenFileName(
-            self, "Select a video file to test the system with",
-            self.ctrl.settings.camera.video.path,
-            f"Video files ({pattern});;All files (*)")
-        if not path:
-            return
-        log.info("Video demo requested: %s", path)
-        if self.ctrl.running:
-            self.ctrl.stop_system()
-
-        # 1 - camera: switch to the video file, looping and at the file's own frame rate
-        cfg = deepcopy(self.ctrl.settings.camera)
-        cfg.camera_type = CameraType.VIDEO.value
-        cfg.video.path = path
-        cfg.video.loop = True
-        cfg.video.realtime = True
-        cfg.video.start_paused = False
-        if cfg.is_ai_camera and cfg.ai_camera.provider_enum != EventProviderType.MOCK:
-            # A video file cannot send AI events, so the demo runs on simulated ones.
-            cfg.ai_camera.event_provider = EventProviderType.MOCK.value
-            cfg.ai_camera.rtsp_url = ""
-            log.info("Video demo: event provider switched to simulated events")
-            self._show_message("Video demo: event provider switched to 'Simulated events' - "
-                               "use the AI Event tab to inject person enter / exit")
-        self.camera_cfg.set_config(cfg)
-        self.ctrl.apply_camera_config(cfg)
-        self._apply_detection_mode(cfg.detection_mode)
-
-        # 2 - ROI: without an include zone the area could never become OCCUPIED
-        #     (AI Camera mode has no PC side ROI - the camera owns the zones)
-        if not cfg.is_ai_camera and not [r for r in self.ctrl.roi_manager.include_rois()
-                                         if r.enabled and r.is_valid()]:
-            roi = self.ctrl.roi_manager.create(RoiType.INCLUDE, DEMO_ROI_POINTS, name="Demo Zone")
-            self.ctrl.save_rois()   # keep the zone (and the workflow step) in a finished state
-            log.info("Video demo: created default zone %s (edit or delete it in tab 3 ROI)", roi.id)
-
-        # 3 - PLC: keep a real connection if there is one, otherwise demo against the virtual PLC
-        if not self._plc_connected and not self.ctrl.settings.plc.simulation_mode:
-            log.info("Video demo: no PLC connected - switching to simulation mode")
-            self.btn_sim.setChecked(True)
-
-        # 4 - run: open and start the new source explicitly (start_system() only asks for a start when
-        # it already knows the camera is not streaming, and that state is still the previous source's).
-        self.ctrl.camera_connect()
-        self.ctrl.camera_start()
-        self.ctrl.start_system()
-        self.tabs.setCurrentIndex(TAB_STATUS)
-        self._show_message(f"Video demo: {Path(path).name} - camera, AI, ROI and PLC simulation are starting...")
-
     # ================================================================== small helpers
     def toggle_fullscreen(self) -> None:
         """F11: borderless fullscreen <-> maximized (the normal working state)."""
@@ -520,16 +455,10 @@ class MainWindow(QMainWindow):
             self.showFullScreen()
 
     def _update_clock(self) -> None:
-        self.lbl_clock.setText(datetime.now().strftime("%Y-%m-%d   %H:%M:%S"))
+        self.appbar.set_clock(datetime.now().strftime("%d/%m/%Y   %H:%M:%S"))
 
     def _show_message(self, text: str) -> None:
         self.statusBar().showMessage(text, 10000)
-
-    def _workflow_clicked(self, step: int) -> None:
-        mapping = STEP_TO_TAB_AI if self._ai_camera_mode else STEP_TO_TAB
-        self.tabs.setCurrentIndex(mapping.get(step, TAB_STATUS))
-        if step == 4 and self.btn_start.isEnabled():
-            self.btn_start.setFocus()
 
     def _start_drawing(self, rtype: RoiType) -> None:
         self.tabs.setCurrentIndex(TAB_ROI)
@@ -543,22 +472,19 @@ class MainWindow(QMainWindow):
         self.camera_cfg.apply_now()
         self.ctrl.camera_start()
 
+    def _open_alert_tab(self) -> None:
+        self.tabs.setCurrentIndex(getattr(self, "_alert_tab", TAB_STATUS))
+
     # ================================================================== status slots
     def _apply_area(self, status: str) -> None:
-        caption = status_caption(status)
-        color = status_color(status)
-        self.status_panel.set_area_status(status, caption)
-        self.video.set_area_status(caption if status != "STOPPED" else "", color)
-        self.lbl_toolbar_area.setText(caption)
-        self.lbl_toolbar_area.setStyleSheet(
-            f"background: {color}; color: {contrast_text(color)}; font-weight: 800; font-size: 13pt;"
-            f" padding: 7px 18px; border-radius: 6px; letter-spacing: 1.5px;")
+        caption_text = status_caption(status)
+        self.status_panel.set_area_status(status, caption_text)
+        self.video.set_area_status(caption_text if status != "STOPPED" else "", status_color(status))
+        self.banner.set_status(status, caption_text)
 
     def _on_system_state(self, state: str, msg: str) -> None:
         self._system_state = state
         self._system_message = msg
-        led = {"RUNNING": "ok", "FAULT": "error", "STARTING": "busy"}.get(state, "off")
-        self.led_system.set_state(led)
         self.status_panel.set_system(state, msg)
         running = self.ctrl.running
         self.btn_start.setEnabled(not running)
@@ -567,10 +493,10 @@ class MainWindow(QMainWindow):
         if msg:
             self.status_panel.set_detail(msg)
         elif state == "RUNNING":
-            self.status_panel.set_detail("Monitoring active")
+            self.status_panel.set_detail("Đang giám sát")
         elif state == "STOPPED":
-            self.status_panel.set_detail("System stopped - press START SYSTEM to begin")
-        self._update_workflow()
+            self.status_panel.set_detail("Hệ thống đã dừng - nhấn START để bắt đầu")
+        self._refresh_status()
 
     def _on_camera_state(self, state: str, msg: str) -> None:
         if state in ("TEST_OK", "TEST_FAIL"):
@@ -580,7 +506,6 @@ class MainWindow(QMainWindow):
         led = {CameraState.STREAMING: "ok", CameraState.CONNECTED: "busy", CameraState.CONNECTING: "busy",
                CameraState.RECONNECTING: "warn", CameraState.FINISHED: "warn"}.get(
             state, "error" if state in (CameraState.LOST, CameraState.ERROR) else "off")
-        self.led_camera.set_state(led)
         self.status_panel.set_camera(state, led)
         self.camera_cfg.set_camera_state(state)
         self._update_camera_buttons(state)
@@ -589,9 +514,18 @@ class MainWindow(QMainWindow):
         self.camera_cfg.set_status(f"{state}: {msg}" if msg else state, ok)
         if state in (CameraState.DISCONNECTED, CameraState.LOST, CameraState.ERROR):
             self.status_panel.set_fps_camera(0.0)
+            self.lbl_fps.setText("")
         if state == CameraState.DISCONNECTED:
             self.video.clear_image()
-        self._update_workflow()
+        self._refresh_status()
+
+    def _on_camera_fps(self, fps: float) -> None:
+        self.status_panel.set_fps_camera(fps)
+        self.lbl_fps.setText(f"{fps:.1f} fps" if fps > 0 else "")
+
+    def _on_camera_info(self, info) -> None:
+        self.camera_cfg.set_status(info.summary(), ok=True)
+        self.lbl_source.setText(info.summary())
 
     def _update_camera_buttons(self, state: str) -> None:
         connected = state in (CameraState.CONNECTED, CameraState.STREAMING, CameraState.FINISHED,
@@ -608,36 +542,32 @@ class MainWindow(QMainWindow):
         self.ai_cfg.set_model_status(msg, loaded if (failed or loaded) else None)
         if not self._detecting and not self._ai_camera_mode:
             led = "busy" if loaded else ("error" if failed else "off")
-            self.led_ai.set_state(led)
             self.status_panel.set_ai("MODEL LOADED" if loaded else ("LOAD FAILED" if failed else "STOPPED"), led)
-        self._update_workflow()
+        self._refresh_status()
 
     def _on_detection_state(self, running: bool, msg: str) -> None:
         self._detecting = running
         self.ai_cfg.set_detection_running(running)
         led = "ok" if running else ("busy" if self._model_loaded else "off")
-        if not self._ai_camera_mode:
-            self.led_ai.set_state(led)
         self.status_panel.set_ai("RUNNING" if running else ("MODEL LOADED" if self._model_loaded else "STOPPED"), led)
         self.video.set_display_mode("result" if running else "raw")
         if not running:
             self.video.clear_result()
             self.status_panel.set_ai_perf(0.0, 0.0)
             self.status_panel.set_counts(0, 0, 0, 0, "")
-        self._update_workflow()
+        self._refresh_status()
 
     def _on_plc_state(self, connected: bool, msg: str) -> None:
         self._plc_connected = connected
         sim = self.ctrl.settings.plc.simulation_mode
         led = "ok" if (connected and not sim) else ("warn" if connected else "error")
-        self.led_plc.set_state(led)
         label = ("SIMULATION" if sim else "CONNECTED") if connected else "DISCONNECTED"
         self.status_panel.set_plc(label, led)
         self.plc_cfg.set_connected(connected)
         self.plc_cfg.set_status(f"{label}: {msg}" if msg else label, connected)
         if not connected:
             self.status_panel.set_heartbeat(None, self.ctrl.settings.plc.heartbeat.enabled)
-        self._update_workflow()
+        self._refresh_status()
 
     def _on_result(self, result) -> None:
         self.video.set_result(result)
@@ -653,7 +583,7 @@ class MainWindow(QMainWindow):
         self.video.set_rois(rois)
         self.roi_panel.set_rois(rois, self._roi_states)
         self.roi_panel.set_dirty(self.ctrl.roi_manager.dirty)
-        self._update_workflow()
+        self._refresh_status()
 
     def _on_editor_mode(self, mode: str) -> None:
         self.roi_panel.set_mode(mode)
@@ -662,9 +592,14 @@ class MainWindow(QMainWindow):
         self.btn_q_edit.blockSignals(False)
         self.btn_q_finish.setEnabled(mode == "drawing")
         self.lbl_video_hint.setText({
-            "drawing": "Click to add points  ·  double-click / Enter to close  ·  right-click undo  ·  Esc cancel",
-            "edit": "Drag a vertex  ·  Shift+click an edge to insert  ·  right-click a vertex to remove  ·  Delete removes the ROI",
-        }.get(mode, "Tip: draw a zone (step 3), then START SYSTEM"))
+            "drawing": "Click thêm điểm  ·  double-click / Enter để đóng  ·  chuột phải hoàn tác  ·  Esc huỷ",
+            "edit": "Kéo đỉnh để sửa  ·  Shift+click cạnh để thêm đỉnh  ·  chuột phải xoá đỉnh  ·  Delete xoá vùng",
+        }.get(mode, self._idle_hint()))
+
+    def _idle_hint(self) -> str:
+        if self._ai_camera_mode:
+            return "Chế độ AI Camera: camera tự phát hiện người, PC chỉ nhận sự kiện. Gán vùng ở tab AI Events."
+        return "Vẽ vùng giám sát rồi nhấn START để bắt đầu."
 
     # ================================================================== AI camera mode
     def _apply_detection_mode(self, mode_value: str) -> None:
@@ -678,30 +613,24 @@ class MainWindow(QMainWindow):
         self.status_panel.set_ai_camera_mode(ai)
         self.status_panel.set_detection_mode("CAMERA AI" if ai else "PC AI / YOLO")
         self.video.set_placeholder(PLACEHOLDER_AI_CAMERA if ai else PLACEHOLDER_YOLO)
+        self.appbar.set_mode("AI CAMERA" if ai else "PC AI · YOLO")
         self._update_window_title()
         self.tabs.setTabVisible(TAB_EVENT, ai)
         self.tabs.setTabVisible(TAB_AI, not ai)
         self.tabs.setTabVisible(TAB_ROI, not ai)
-        # keep the numbers of the *visible* tabs in step with the workflow bar
-        self.tabs.setTabText(TAB_PLC, "3 PLC" if ai else "4 PLC")
         self.status_panel.set_count_labels(ai)
-        if ai:
-            self.workflow.set_step_title(1, "AI Events", "Kênh sự kiện AI của camera (ISAPI / HTTP)")
-            self.workflow.set_step_title(2, "Regions", "Gán region id của camera vào tên vùng và bit PLC")
-        else:
-            self.workflow.set_step_title(1, "AI Model", "Nạp model YOLO pretrained để phát hiện person")
-            self.workflow.set_step_title(2, "ROI Zones", "Vẽ vùng giám sát (polygon) trên hình")
+        self.chip_detect.set_caption("AI EVENTS" if ai else "AI MODEL")
+        self.chip_zones.set_caption("REGIONS" if ai else "ZONES")
         provider = self.ctrl.settings.camera.ai_camera.provider_enum
         self.event_monitor.set_simulation_available(provider == EventProviderType.MOCK)
         for btn in (self.btn_q_add, self.btn_q_ex, self.btn_q_finish, self.btn_q_edit, self.btn_q_save):
             btn.setEnabled(not ai)
-            btn.setToolTip("Zones are configured inside the camera in AI Camera mode "
-                           "(see the AI Event tab)" if ai else btn.toolTip())
-        if ai:
-            self.lbl_video_hint.setText("AI Camera mode: the camera detects people and sends events. "
-                                        "Map its regions in the 'AI Event' tab.")
+            if ai:
+                btn.setToolTip("Chế độ AI Camera: vùng được cấu hình trong camera (xem tab AI Events)")
+        self.lbl_video_hint.setText(self._idle_hint())
+        self.lbl_source.setText(self.camera_cfg.get_config().describe_source())
         self.video.set_display_mode("raw" if ai else self.video._display_mode)
-        self._update_workflow()
+        self._refresh_status()
 
     def _update_window_title(self) -> None:
         source = "AI Camera" if self._ai_camera_mode else "PC AI / YOLO"
@@ -729,9 +658,7 @@ class MainWindow(QMainWindow):
         led = {"ONLINE": "ok", "CONNECTING": "busy", "RECONNECTING": "warn",
                "ERROR": "error", "DISABLED": "off"}.get(state, "error" if state == "DISCONNECTED" else "off")
         self.status_panel.set_event_channel(state, led)
-        if self._ai_camera_mode:
-            self.led_ai.set_state(led)
-        self._update_workflow()
+        self._refresh_status()
 
     def _on_zone_states(self, states) -> None:
         self.event_monitor.update_zone_states(states)
@@ -742,99 +669,104 @@ class MainWindow(QMainWindow):
 
     def _on_regions_changed(self) -> None:
         self.event_monitor.set_regions(self.ctrl.region_mapping.all(), self.ctrl.zone_states())
-        self._update_workflow()
+        self._refresh_status()
 
     def _save_regions(self) -> None:
         self.ctrl.save_regions()
         self.event_monitor.set_regions_dirty(False)
 
-    # ================================================================== workflow bar
-    def _update_workflow(self) -> None:
-        # 1 - camera
+    # ================================================================== state chips + alert
+    def _refresh_status(self) -> None:
+        """Recompute the four chips, then surface the worst problem in the alert strip."""
         cam = {
-            CameraState.STREAMING: ("done", "Streaming"),
-            CameraState.CONNECTED: ("active", "Connected - press Start"),
-            CameraState.CONNECTING: ("active", "Connecting..."),
-            CameraState.RECONNECTING: ("warn", "Reconnecting..."),
-            CameraState.FINISHED: ("warn", "Video finished"),
-            CameraState.LOST: ("error", "Camera lost"),
-            CameraState.ERROR: ("error", "Connection error"),
-        }.get(self._camera_state, ("todo", "Not connected"))
-        self.workflow.set_step(0, *cam)
+            CameraState.STREAMING: ("ok", "Đang truyền hình"),
+            CameraState.CONNECTED: ("busy", "Đã kết nối - nhấn Start"),
+            CameraState.CONNECTING: ("busy", "Đang kết nối..."),
+            CameraState.RECONNECTING: ("warn", "Đang kết nối lại..."),
+            CameraState.FINISHED: ("warn", "Hết video"),
+            CameraState.LOST: ("error", "Mất camera"),
+            CameraState.ERROR: ("error", "Lỗi kết nối"),
+        }.get(self._camera_state, ("off", "Chưa kết nối"))
+        self.chip_camera.set(cam[0], cam[1])
 
-        ai_mode = self._ai_camera_mode
-        if ai_mode:
-            self._update_workflow_ai_camera()
-            return
-
-        # 2 - AI model
-        if self._detecting:
-            ai = ("done", "Detecting persons")
-        elif self._model_error:
-            ai = ("error", "Model load failed")
-        elif self._model_loaded:
-            ai = ("active", "Model loaded")
+        if self._ai_camera_mode:
+            detect = {
+                "ONLINE": ("ok", "Đang nhận sự kiện", ""),
+                "CONNECTING": ("busy", "Đang kết nối...", ""),
+                "RECONNECTING": ("warn", "Đang kết nối lại", self._event_message),
+                "ERROR": ("error", self._event_message or "Không mở được kênh sự kiện", self._event_message),
+                "DISABLED": ("off", "Không dùng", ""),
+            }.get(self._event_channel, ("off", "Chưa kết nối", ""))
+            zones = self._region_chip()
         else:
-            ai = ("todo", "Model not loaded")
-        self.workflow.set_step(1, *ai)
+            if self._detecting:
+                detect = ("ok", "Đang phát hiện người", "")
+            elif self._model_error:
+                detect = ("error", "Nạp model thất bại", self._model_error)
+            elif self._model_loaded:
+                detect = ("busy", "Đã nạp model", "")
+            else:
+                detect = ("off", "Chưa nạp model", "")
+            zones = self._zone_chip()
+        self.chip_detect.set(detect[0], detect[1], detect[2] or detect[1])
+        self.chip_zones.set(*zones)
 
-        # 3 - ROI
+        sim = self.ctrl.settings.plc.simulation_mode
+        if self._plc_connected:
+            plc = (("warn", "Mô phỏng (PLC ảo)") if sim
+                   else ("ok", f"Đã kết nối {self.ctrl.settings.plc.connection.ip}"))
+        else:
+            plc = ("error" if self.ctrl.running else "off", "Chưa kết nối")
+        self.chip_plc.set(plc[0], plc[1])
+
+        self._refresh_alert()
+
+    def _region_chip(self) -> tuple:
+        known = self.ctrl.region_mapping.all()
+        mapped = [r for r in known if r.enabled and r.plc_device]
+        if not known:
+            return ("warn", "Chưa thấy vùng nào từ camera",
+                    "Camera chưa gửi sự kiện nào nên phần mềm chưa biết camera có những vùng nào")
+        if not mapped:
+            return ("warn", f"{len(known)} vùng, chưa gán PLC", "")
+        return ("ok", f"Đã gán {len(mapped)}/{len(known)} vùng", "")
+
+    def _zone_chip(self) -> tuple:
         includes = [r for r in self.ctrl.roi_manager.include_rois() if r.enabled and r.is_valid()]
         excludes = [r for r in self.ctrl.roi_manager.exclude_rois() if r.enabled and r.is_valid()]
         if not includes:
-            roi = ("warn", "No monitored zone yet")
-        else:
-            detail = f"{len(includes)} zone(s)" + (f" + {len(excludes)} exclusion" if excludes else "")
-            roi = ("active" if self.ctrl.roi_manager.dirty else "done",
-                   detail + (" · unsaved" if self.ctrl.roi_manager.dirty else ""))
-        self.workflow.set_step(2, *roi)
+            return ("warn", "Chưa vẽ vùng giám sát", "")
+        detail = f"{len(includes)} vùng" + (f" + {len(excludes)} loại trừ" if excludes else "")
+        dirty = self.ctrl.roi_manager.dirty
+        return ("busy" if dirty else "ok", detail + (" · chưa lưu" if dirty else ""), "")
 
-        self._update_workflow_plc()
+    def _refresh_alert(self) -> None:
+        """One line, only when it earns its place: the most severe unhealthy subsystem.
 
-        # 5 - run
-        run = {
-            "RUNNING": ("done", "Monitoring active"),
-            "FAULT": ("error", self._system_message or "Fault"),
-            "STARTING": ("active", "Starting..."),
-        }.get(self._system_state, ("todo", "Press START SYSTEM (F5)"))
-        self.workflow.set_step(4, *run)
-
-    def _update_workflow_plc(self) -> None:
-        sim = self.ctrl.settings.plc.simulation_mode
-        if self._plc_connected:
-            detail = "Simulation (virtual PLC)" if sim else f"Connected {self.ctrl.settings.plc.connection.ip}"
-            self.workflow.set_step(3, "done", detail)
-        else:
-            self.workflow.set_step(3, "error" if self.ctrl.running else "todo", "Not connected")
-
-    def _update_workflow_ai_camera(self) -> None:
-        """Steps 2 and 3 mean 'event channel' and 'region mapping' in AI Camera mode."""
-        channel = {
-            "ONLINE": ("done", "Receiving camera events"),
-            "CONNECTING": ("active", "Connecting..."),
-            "RECONNECTING": ("warn", self._event_message or "Reconnecting..."),
-            "ERROR": ("error", self._event_message or "Cannot open the event channel"),
-            "DISABLED": ("todo", "Not used"),
-        }.get(self._event_channel, ("todo", "Not connected"))
-        self.workflow.set_step(1, *channel)
-
-        mapped = [r for r in self.ctrl.region_mapping.all() if r.enabled and r.plc_device]
-        known = self.ctrl.region_mapping.all()
-        if not known:
-            regions = ("warn", "No camera region seen yet")
-        elif not mapped:
-            regions = ("warn", f"{len(known)} region(s), none mapped to a PLC device")
-        else:
-            regions = ("done", f"{len(mapped)} of {len(known)} region(s) mapped")
-        self.workflow.set_step(2, *regions)
-        self._update_workflow_plc()
-
-        run = {
-            "RUNNING": ("done", "Monitoring active"),
-            "FAULT": ("error", self._system_message or "Fault"),
-            "STARTING": ("active", "Starting..."),
-        }.get(self._system_state, ("todo", "Press START SYSTEM (F5)"))
-        self.workflow.set_step(4, *run)
+        While the system is stopped only hard errors are worth interrupting for - a camera
+        that is simply not connected yet is the normal state of a freshly opened app.
+        """
+        running = self._system_state in ("RUNNING", "STARTING")
+        candidates = [
+            (self.chip_camera, TAB_CAMERA, "Camera"),
+            (self.chip_detect, TAB_EVENT if self._ai_camera_mode else TAB_AI,
+             "Kênh sự kiện AI" if self._ai_camera_mode else "Model AI"),
+            (self.chip_zones, TAB_EVENT if self._ai_camera_mode else TAB_ROI,
+             "Vùng camera" if self._ai_camera_mode else "Vùng giám sát"),
+            (self.chip_plc, TAB_PLC, "PLC"),
+        ]
+        unhealthy = [(chip, tab, name, chip.led.state) for chip, tab, name in candidates
+                     if chip.led.state == "error" or (chip.led.state == "warn" and running)]
+        if not unhealthy:
+            self.alert.clear()
+            return
+        errors = [u for u in unhealthy if u[3] == "error"]
+        chip, tab, name, state = (errors or unhealthy)[0]
+        self._alert_tab = tab
+        detail = chip.lbl_value.full_text()
+        tip = chip.toolTip()
+        text = f"{name}: {detail}" + (f" — {tip}" if tip and tip != detail else "")
+        self.alert.show_alert(state, text, "Mở tab")
 
     # ================================================================== ROI / events actions
     def _delete_roi(self, roi_id: str) -> None:
@@ -842,18 +774,19 @@ class MainWindow(QMainWindow):
             self.ctrl.delete_roi(roi_id)
 
     def _clear_rois(self) -> None:
-        if QMessageBox.question(self, "Clear all ROI",
-                                "Delete ALL ROIs (including exclusion zones)?") == QMessageBox.StandardButton.Yes:
+        if QMessageBox.question(self, "Xoá tất cả vùng",
+                                "Xoá TOÀN BỘ vùng giám sát (kể cả vùng loại trừ)?") == \
+                QMessageBox.StandardButton.Yes:
             self.ctrl.clear_rois()
 
     def _save_rois(self) -> None:
         self.ctrl.save_rois()
         self.roi_panel.set_dirty(self.ctrl.roi_manager.dirty)
-        self._update_workflow()
+        self._refresh_status()
 
     def _clear_events(self) -> None:
-        if QMessageBox.question(self, "Clear history",
-                                "Delete the whole event history?") == QMessageBox.StandardButton.Yes:
+        if QMessageBox.question(self, "Xoá lịch sử",
+                                "Xoá toàn bộ lịch sử sự kiện?") == QMessageBox.StandardButton.Yes:
             self.ctrl.events.clear()
             self.events_widget.set_events([], 0)
 
@@ -866,13 +799,13 @@ class MainWindow(QMainWindow):
         self.btn_sim.blockSignals(False)
         self._style_sim_button(cfg.simulation_mode)
         self.status_panel.set_heartbeat(None, cfg.heartbeat.enabled)
-        self._update_workflow()
+        self._refresh_status()
 
     def _sim_toggled_toolbar(self, on: bool) -> None:
         self._style_sim_button(on)
         self.plc_cfg.set_simulation(on)
         self.ctrl.set_simulation(on)
-        self._update_workflow()
+        self._refresh_status()
 
     def _sim_toggled_tab(self, on: bool) -> None:
         self.btn_sim.blockSignals(True)
@@ -880,12 +813,12 @@ class MainWindow(QMainWindow):
         self.btn_sim.blockSignals(False)
         self._style_sim_button(on)
         self.ctrl.set_simulation(on)
-        self._update_workflow()
+        self._refresh_status()
 
     # ================================================================== close
     def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802
         if self.ctrl.running:
-            if QMessageBox.question(self, "Exit", "The system is RUNNING. Stop monitoring and exit?") != \
+            if QMessageBox.question(self, "Thoát", "Hệ thống đang chạy. Dừng giám sát và thoát?") != \
                     QMessageBox.StandardButton.Yes:
                 event.ignore()
                 return

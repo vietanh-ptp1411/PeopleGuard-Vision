@@ -10,6 +10,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QFileDialog, QHBoxLayout, QLab
 
 from ...storage.event_repository import EventRecord
 from ..theme import COLOR_ERROR, COLOR_OK, COLOR_TEXT_DIM, COLOR_WARN
+from .form_helpers import page_header
 
 
 class EventsWidget(QWidget):
@@ -23,21 +24,22 @@ class EventsWidget(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         lay = QVBoxLayout(self)
-        head = QHBoxLayout()
-        title = QLabel("EVENT HISTORY")
-        title.setProperty("class", "title")
-        head.addWidget(title)
-        head.addStretch(1)
+        lay.setContentsMargins(0, 8, 0, 0)
+        lay.setSpacing(8)
         self.lbl_count = QLabel("")
         self.lbl_count.setStyleSheet(f"color: {COLOR_TEXT_DIM};")
-        head.addWidget(self.lbl_count)
+        lay.addWidget(page_header("History", "Nhật ký sự kiện lưu trong SQLite", self.lbl_count))
+
+        head = QHBoxLayout()
+        head.setSpacing(6)
         self.btn_refresh = QPushButton("Refresh")
         self.btn_export = QPushButton("Export CSV")
         self.btn_clear = QPushButton("Clear history")
-        self.btn_clear.setProperty("class", "danger")
-        head.addWidget(self.btn_refresh)
-        head.addWidget(self.btn_export)
-        head.addWidget(self.btn_clear)
+        self.btn_clear.setProperty("class", "dangerline")
+        for b in (self.btn_refresh, self.btn_export, self.btn_clear):
+            b.setProperty("size", "sm")
+            head.addWidget(b)
+        head.addStretch(1)
         lay.addLayout(head)
         self.table = QTableWidget(0, len(self.COLS))
         self.table.setHorizontalHeaderLabels(self.COLS)
@@ -53,7 +55,7 @@ class EventsWidget(QWidget):
         self.btn_clear.clicked.connect(self.clear_requested)
 
     def _export(self) -> None:
-        path, _ = QFileDialog.getSaveFileName(self, "Export events", "events/events.csv", "CSV (*.csv)")
+        path, _ = QFileDialog.getSaveFileName(self, "Xuất file CSV", "events/events.csv", "CSV (*.csv)")
         if path:
             self.export_requested.emit(path)
 

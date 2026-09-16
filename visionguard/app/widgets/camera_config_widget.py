@@ -15,7 +15,7 @@ from ...camera.video_camera import VIDEO_EXTENSIONS
 from ...config.schemas import CameraBrand, CameraConfig, CameraType, DetectionMode, EventProviderType
 from ..theme import COLOR_ERROR, COLOR_OK, COLOR_TEXT_DIM
 from .ai_camera_widget import AiCameraWidget
-from .form_helpers import AdvancedSection, advanced_checkbox, hint
+from .form_helpers import AdvancedSection, advanced_checkbox, hint, page_header
 
 
 def _btn(text: str, cls: str = "") -> QPushButton:
@@ -60,12 +60,10 @@ class CameraConfigWidget(QWidget):
         lay = QVBoxLayout(body)
         lay.setSpacing(8)
 
-        head = QHBoxLayout()
         self.chk_advanced = advanced_checkbox(self.advanced)
         self.chk_advanced.toggled.connect(self._advanced_toggled)
-        head.addWidget(self.chk_advanced)
-        head.addStretch(1)
-        lay.addLayout(head)
+        lay.addWidget(page_header("Camera", "Nguồn hình và tài khoản camera",
+                                  self.chk_advanced))
 
         # detection mode + brand
         g_mode = QGroupBox("DETECTION MODE")
@@ -216,14 +214,14 @@ class CameraConfigWidget(QWidget):
         f = QFormLayout(w)
         row = QHBoxLayout()
         self.edt_video_path = QLineEdit()
-        self.edt_video_path.setPlaceholderText("path/to/video.mp4")
+        self.edt_video_path.setPlaceholderText("đường dẫn tới file video .mp4")
         self.btn_video_browse = _btn("Browse...")
         self.btn_video_browse.clicked.connect(self._browse_video)
         row.addWidget(self.edt_video_path, 1)
         row.addWidget(self.btn_video_browse)
         f.addRow("Video", row)
         self.chk_video_loop = QCheckBox("Loop")
-        self.chk_video_realtime = QCheckBox("Real-time playback (file FPS)")
+        self.chk_video_realtime = QCheckBox("Phát đúng tốc độ thật của file")
         self.chk_video_loop.toggled.connect(lambda v: self.video_command.emit("loop", bool(v)))
         f.addRow(self.chk_video_loop)
         f.addRow(self.chk_video_realtime)
@@ -261,7 +259,7 @@ class CameraConfigWidget(QWidget):
         self.edt_rtsp_pass.setEchoMode(QLineEdit.EchoMode.Password)
         self.edt_rtsp_path = QLineEdit()
         self.edt_rtsp_url = QLineEdit()
-        self.edt_rtsp_url.setPlaceholderText("rtsp://user:pass@ip:554/... (overrides fields above if set)")
+        self.edt_rtsp_url.setPlaceholderText("rtsp://...  (điền vào sẽ ghi đè các ô bên trên)")
         self.cmb_rtsp_transport = QComboBox()
         self.cmb_rtsp_transport.addItems(["tcp", "udp"])
         self.spn_rtsp_timeout = QSpinBox()
@@ -302,7 +300,7 @@ class CameraConfigWidget(QWidget):
         row.addWidget(self.btn_ind_scan)
         f.addRow("Devices", row)
         self.edt_ind_serial = QLineEdit()
-        self.edt_ind_serial.setPlaceholderText("empty = first device")
+        self.edt_ind_serial.setPlaceholderText("để trống = thiết bị đầu tiên")
         f.addRow("Serial Number", self.edt_ind_serial)
         self.spn_ind_exposure = QDoubleSpinBox()
         self.spn_ind_exposure.setRange(1.0, 10_000_000.0)
@@ -326,7 +324,7 @@ class CameraConfigWidget(QWidget):
         f.addRow("Grab timeout", self.spn_ind_timeout)
         crow = QHBoxLayout()
         self.edt_cti = QLineEdit()
-        self.edt_cti.setPlaceholderText("GenICam only: path to GenTL producer .cti")
+        self.edt_cti.setPlaceholderText("chỉ cho GenICam: đường dẫn file GenTL producer .cti")
         self.btn_cti = _btn("Browse...")
         self.btn_cti.clicked.connect(self._browse_cti)
         crow.addWidget(self.edt_cti, 1)
@@ -361,9 +359,9 @@ class CameraConfigWidget(QWidget):
         ai = self.current_mode() == DetectionMode.AI_CAMERA
         self.g_type.setVisible(not ai)
         self.lbl_mode_hint.setText(
-            "The camera detects people itself and sends events; the PC shows the RTSP picture and "
-            "drives the PLC. YOLO stays installed but idle." if ai else
-            "The PC runs YOLO on the video stream and evaluates the polygon ROIs drawn in the ROI tab.")
+            "Camera tự phát hiện người và gửi sự kiện về; PC chỉ hiển thị hình RTSP và điều khiển "
+            "PLC. YOLO vẫn được cài nhưng không chạy." if ai else
+            "PC chạy YOLO trên luồng hình và kiểm tra các vùng polygon vẽ ở tab Zones.")
         self._on_type_changed()
         self.detection_mode_changed.emit(self.current_mode().value)
 
@@ -439,12 +437,12 @@ class CameraConfigWidget(QWidget):
 
     def _browse_video(self) -> None:
         pattern = " ".join(f"*{e}" for e in VIDEO_EXTENSIONS)
-        path, _ = QFileDialog.getOpenFileName(self, "Select video file", "", f"Video files ({pattern});;All files (*)")
+        path, _ = QFileDialog.getOpenFileName(self, "Chọn file video", "", f"Video files ({pattern});;All files (*)")
         if path:
             self.edt_video_path.setText(path)
 
     def _browse_cti(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(self, "Select GenTL producer", "", "GenTL producer (*.cti);;All files (*)")
+        path, _ = QFileDialog.getOpenFileName(self, "Chọn GenTL producer", "", "GenTL producer (*.cti);;All files (*)")
         if path:
             self.edt_cti.setText(path)
 
@@ -458,7 +456,7 @@ class CameraConfigWidget(QWidget):
         for d in devices:
             combo.addItem(d.display_name, d.identifier)
         combo.blockSignals(False)
-        self.set_status(f"Scan: {len(devices)} device(s) found", ok=bool(devices))
+        self.set_status(f"Quét: tìm thấy {len(devices)} thiết bị", ok=bool(devices))
 
     def set_status(self, text: str, ok: bool | None = None) -> None:
         color = COLOR_TEXT_DIM if ok is None else (COLOR_OK if ok else COLOR_ERROR)
@@ -475,9 +473,9 @@ class CameraConfigWidget(QWidget):
         self.btn_start.setEnabled(not streaming)
         self.btn_stop.setEnabled(streaming or state == "FINISHED")
         self.cmb_type.setEnabled(not connected)
-        self.cmb_type.setToolTip("Disconnect the camera first to change its type" if connected else "")
+        self.cmb_type.setToolTip("Ngắt kết nối camera trước khi đổi loại nguồn hình" if connected else "")
         self.cmb_mode.setEnabled(not connected)
-        self.cmb_mode.setToolTip("Disconnect the camera first to change the detection mode" if connected else "")
+        self.cmb_mode.setToolTip("Ngắt kết nối camera trước khi đổi chế độ phát hiện" if connected else "")
 
     def set_video_position(self, current: int, total: int) -> None:
         self.lbl_video_pos.setText(f"{current} / {total}")
@@ -499,9 +497,9 @@ class CameraConfigWidget(QWidget):
         ai = cfg.is_ai_camera
         self.g_type.setVisible(not ai)
         self.lbl_mode_hint.setText(
-            "The camera detects people itself and sends events; the PC shows the RTSP picture and "
-            "drives the PLC. YOLO stays installed but idle." if ai else
-            "The PC runs YOLO on the video stream and evaluates the polygon ROIs drawn in the ROI tab.")
+            "Camera tự phát hiện người và gửi sự kiện về; PC chỉ hiển thị hình RTSP và điều khiển "
+            "PLC. YOLO vẫn được cài nhưng không chạy." if ai else
+            "PC chạy YOLO trên luồng hình và kiểm tra các vùng polygon vẽ ở tab Zones.")
         self._on_type_changed()
         u = cfg.usb
         self.spn_usb_index.setValue(u.device_index)
