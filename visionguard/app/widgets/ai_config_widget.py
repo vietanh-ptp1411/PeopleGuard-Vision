@@ -9,6 +9,7 @@ from PySide6.QtWidgets import (QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog
 
 from ...config.schemas import AIConfig, ContainmentMode
 from ..theme import COLOR_ERROR, COLOR_OK, COLOR_TEXT_DIM
+from .form_helpers import AdvancedSection, advanced_checkbox, hint
 
 
 class AIConfigWidget(QWidget):
@@ -20,6 +21,7 @@ class AIConfigWidget(QWidget):
     def __init__(self, config: AIConfig, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._config = deepcopy(config)
+        self.advanced = AdvancedSection()
         self._build()
         self.set_config(config)
 
@@ -34,6 +36,12 @@ class AIConfigWidget(QWidget):
         scroll.setWidget(body)
         lay = QVBoxLayout(body)
         lay.setSpacing(8)
+
+        head = QHBoxLayout()
+        self.chk_advanced = advanced_checkbox(self.advanced)
+        head.addWidget(self.chk_advanced)
+        head.addStretch(1)
+        lay.addLayout(head)
 
         g = QGroupBox("YOLO PERSON DETECTOR")
         f = QFormLayout(g)
@@ -59,12 +67,15 @@ class AIConfigWidget(QWidget):
         self.chk_half = QCheckBox("FP16 on CUDA")
         self.chk_autoload = QCheckBox("Load model automatically at startup")
         f.addRow("Confidence", self.spn_conf)
-        f.addRow("IoU", self.spn_iou)
         f.addRow("Device", self.cmb_device)
+        f.addRow(hint("Confidence thấp thì dễ bắt người hơn nhưng dễ báo nhầm. Device auto sẽ dùng GPU nếu có."))
+        f.addRow("IoU", self.spn_iou)
         f.addRow("Image size", self.spn_imgsz)
-        f.addRow(self.chk_tracking)
-        f.addRow(self.chk_half)
-        f.addRow(self.chk_autoload)
+        f.addRow("", self.chk_tracking)
+        f.addRow("", self.chk_half)
+        f.addRow("", self.chk_autoload)
+        self.advanced.rows(f, self.spn_iou, self.spn_imgsz, self.chk_tracking, self.chk_half,
+                           self.chk_autoload)
         self.lbl_model = QLabel("Model: not loaded")
         self.lbl_model.setWordWrap(True)
         self.lbl_model.setStyleSheet(f"color: {COLOR_TEXT_DIM};")
@@ -91,15 +102,14 @@ class AIConfigWidget(QWidget):
         self.spn_min_frames = QSpinBox()
         self.spn_min_frames.setRange(1, 100)
         f2.addRow("Containment mode", self.cmb_mode)
-        f2.addRow("Intersection threshold", self.spn_inter)
         f2.addRow("ON delay", self.spn_on)
         f2.addRow("OFF delay", self.spn_off)
+        f2.addRow("Intersection threshold", self.spn_inter)
         f2.addRow("Min detection frames", self.spn_min_frames)
-        hint = QLabel("ON delay: person must be seen continuously this long before OCCUPIED.\n"
-                      "OFF delay: area must be empty this long before CLEAR (short YOLO misses are held).")
-        hint.setWordWrap(True)
-        hint.setStyleSheet(f"color: {COLOR_TEXT_DIM}; font-size: 9pt;")
-        f2.addRow(hint)
+        self.advanced.rows(f2, self.spn_inter, self.spn_min_frames)
+        f2.addRow(hint("ON delay: người phải xuất hiện liên tục bao lâu mới báo CÓ NGƯỜI.  "
+                       "OFF delay: vùng phải trống bao lâu mới báo HẾT NGƯỜI "
+                       "(mất 1-2 frame vẫn giữ trạng thái)."))
         lay.addWidget(g2)
 
         g3 = QGroupBox("AI CONTROL")
@@ -121,6 +131,8 @@ class AIConfigWidget(QWidget):
         for combo in self.findChildren(QComboBox):
             combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
             combo.setMinimumContentsLength(8)
+
+        self.advanced.set_visible(False)
 
         self.btn_apply.clicked.connect(self._apply)
         self.btn_load.clicked.connect(lambda: (self._apply(), self.load_model_requested.emit()))
@@ -165,6 +177,7 @@ class AIConfigWidget(QWidget):
         self.spn_off.setValue(lg.off_delay_ms)
         self.spn_min_frames.setValue(lg.min_detection_frames)
         self._mode_changed()
+        self.advanced.apply()
 
     def get_config(self) -> AIConfig:
         cfg = deepcopy(self._config)

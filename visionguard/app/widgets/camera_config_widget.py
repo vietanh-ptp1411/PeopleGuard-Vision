@@ -15,6 +15,7 @@ from ...camera.video_camera import VIDEO_EXTENSIONS
 from ...config.schemas import CameraBrand, CameraConfig, CameraType, DetectionMode, EventProviderType
 from ..theme import COLOR_ERROR, COLOR_OK, COLOR_TEXT_DIM
 from .ai_camera_widget import AiCameraWidget
+from .form_helpers import AdvancedSection, advanced_checkbox, hint
 
 
 def _btn(text: str, cls: str = "") -> QPushButton:
@@ -42,6 +43,7 @@ class CameraConfigWidget(QWidget):
         super().__init__(parent)
         self._config = deepcopy(config)
         self._availability = availability
+        self.advanced = AdvancedSection()
         self._build()
         self.set_config(config)
 
@@ -57,6 +59,13 @@ class CameraConfigWidget(QWidget):
         scroll.setWidget(body)
         lay = QVBoxLayout(body)
         lay.setSpacing(8)
+
+        head = QHBoxLayout()
+        self.chk_advanced = advanced_checkbox(self.advanced)
+        self.chk_advanced.toggled.connect(self._advanced_toggled)
+        head.addWidget(self.chk_advanced)
+        head.addStretch(1)
+        lay.addLayout(head)
 
         # detection mode + brand
         g_mode = QGroupBox("DETECTION MODE")
@@ -120,13 +129,14 @@ class CameraConfigWidget(QWidget):
         self.spn_frame_timeout = QDoubleSpinBox()
         self.spn_frame_timeout.setRange(1.0, 120.0)   # below ~1 s an RTSP hiccup looks like a lost camera
         self.spn_frame_timeout.setSuffix(" s")
-        self.spn_frame_timeout.setToolTip("Khong nhan duoc hinh qua lau thi coi la mat camera. "
-                                          "Duoi 1 giay se bao mat ket noi oan khi mang giat.")
+        self.spn_frame_timeout.setToolTip("Không nhận được hình quá lâu thì coi là mất camera. "
+                                          "Dưới 1 giây sẽ báo mất kết nối oan khi mạng giật.")
         self.edt_delays = QLineEdit()
         self.edt_delays.setPlaceholderText("1, 2, 5")
         lrc.addRow(self.chk_reconnect)
         lrc.addRow("Frame timeout", self.spn_frame_timeout)
         lrc.addRow("Retry delays (s)", self.edt_delays)
+        self.advanced.widget(g_rc)
         lay.addWidget(g_rc)
 
         # controls
@@ -153,6 +163,8 @@ class CameraConfigWidget(QWidget):
         for combo in self.findChildren(QComboBox):
             combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
             combo.setMinimumContentsLength(6)
+
+        self.advanced.set_visible(False)
 
         self.btn_apply.clicked.connect(self._apply)
         self.btn_connect.clicked.connect(lambda: (self._apply(), self.connect_requested.emit()))
@@ -328,6 +340,10 @@ class CameraConfigWidget(QWidget):
             return CameraType(self.cmb_type.currentData())
         except ValueError:
             return CameraType.USB
+
+    def _advanced_toggled(self, visible: bool) -> None:
+        """One checkbox rules the whole tab, including the AI camera page."""
+        self.page_ai.set_advanced_visible(visible)
 
     def current_mode(self) -> DetectionMode:
         try:
