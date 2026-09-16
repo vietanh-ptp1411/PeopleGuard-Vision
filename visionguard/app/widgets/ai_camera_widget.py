@@ -22,6 +22,7 @@ class AiCameraWidget(QWidget):
     def __init__(self, config: AiCameraConfig, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._config = deepcopy(config)
+        self._brand = CameraBrand.HIKVISION
         self._build()
         self.set_config(config)
 
@@ -183,15 +184,22 @@ class AiCameraWidget(QWidget):
 
     def _update_preview(self) -> None:
         cfg = self.get_config()
-        self.lbl_rtsp_preview.setText("Video URL: " + mask_url(build_rtsp_url(cfg.to_rtsp_config())))
+        url = mask_url(build_rtsp_url(cfg.to_rtsp_config(self._brand.value)))
+        self.lbl_rtsp_preview.setText("Video URL: " + url)
 
     def set_test_result(self, text: str, ok: bool | None = None) -> None:
         color = COLOR_TEXT_DIM if ok is None else (COLOR_OK if ok else COLOR_ERROR)
         self.lbl_test.setStyleSheet(f"color: {color};")
         self.lbl_test.setText(text)
 
+    def set_brand_display(self, brand: CameraBrand) -> None:
+        """Remember the brand for the RTSP path template, without touching the provider."""
+        self._brand = brand
+        self._update_preview()
+
     def set_brand(self, brand: CameraBrand) -> None:
-        """Preselect the event provider that matches the brand (only when still at its default)."""
+        """User picked a brand: update the path template and preselect its usual provider."""
+        self.set_brand_display(brand)
         default = {CameraBrand.HIKVISION: EventProviderType.ISAPI,
                    CameraBrand.DAHUA: EventProviderType.DAHUA_HTTP}.get(brand)
         if default is None:

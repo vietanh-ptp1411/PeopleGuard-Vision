@@ -1,5 +1,39 @@
 {
+  "detection_mode": "ai_camera",
+  "brand": "hikvision",
   "camera_type": "usb",
+  "ai_camera": {
+    "ip": "192.168.1.64",
+    "http_port": 80,
+    "rtsp_port": 554,
+    "username": "admin",
+    "password": "",
+    "use_https": false,
+    "rtsp_url": "",
+    "rtsp_channel": "101",
+    "rtsp_transport": "tcp",
+    "event_provider": "isapi",
+    "event_url": "",
+    "event_timeout_s": 2.0,
+    "health_interval_s": 30.0,
+    "reconnect_delays_s": [
+      1.0,
+      2.0,
+      5.0
+    ],
+    "channels": [],
+    "logic": {
+      "on_delay_ms": 200,
+      "off_delay_ms": 800,
+      "clear_timeout_s": 5.0,
+      "line_cross_hold_s": 3.0,
+      "use_person_count": true,
+      "strict_human_only": false,
+      "fault_on_event_loss": true,
+      "fault_on_video_loss": true,
+      "unmapped_regions_count": true
+    }
+  },
   "usb": {
     "device_index": 0,
     "width": 1280,
@@ -37,7 +71,7 @@
   },
   "reconnect": {
     "enabled": true,
-    "frame_timeout_s": 0.5,
+    "frame_timeout_s": 5.0,
     "delays_s": [
       1.0,
       2.0,

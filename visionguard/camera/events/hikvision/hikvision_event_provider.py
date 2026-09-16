@@ -36,6 +36,7 @@ class HikvisionEventProvider(CameraEventProvider):
         self._device = ""
         self._last_data = 0.0
         self._last_health = 0.0
+        self._reported_error = ""
 
     # ------------------------------------------------------------------ availability
     @classmethod
@@ -59,7 +60,9 @@ class HikvisionEventProvider(CameraEventProvider):
         except IsapiError as exc:
             self.last_error = str(exc)
             self._connected = False
-            log.warning("Hikvision connect failed: %s", exc)
+            if str(exc) != self._reported_error:      # log a repeated failure only once
+                self._reported_error = str(exc)
+                log.warning("Hikvision %s: %s", self.config.ip, exc)
             return False
         except Exception as exc:  # never let a camera take the app down
             self.last_error = f"Unexpected error: {exc}"
@@ -68,6 +71,7 @@ class HikvisionEventProvider(CameraEventProvider):
         self._device = f"{model} SN {serial} FW {firmware}".strip()
         self._connected = True
         self.last_error = ""
+        self._reported_error = ""
         log.info("Hikvision camera %s: %s", self.config.ip, self._device)
         return True
 

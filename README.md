@@ -81,7 +81,6 @@ VisionGuard/
 ├─ main.py                         # entry point
 ├─ requirements.txt                # core: PySide6, opencv-python, numpy, ultralytics
 ├─ requirements-industrial.txt     # optional: pypylon, harvesters, lap
-├─ requirements-dev.txt            # pytest
 ├─ visionguard/
 │  ├─ app/
 │  │  ├─ main_window.py            # layout + wiring
@@ -115,7 +114,6 @@ VisionGuard/
 │  ├─ storage/ event_repository.py (SQLite)  snapshot_saver.py
 │  └─ utils/   logger.py  performance.py  qt_image.py
 ├─ tools/mc_plc_simulator.py       # PLC Mitsubishi giả lập qua TCP (để test driver thật)
-├─ tests/                          # pytest
 ├─ config/  models/  logs/  events/  resources/
 ```
 
@@ -476,47 +474,31 @@ chạy được chỉ với webcam hoặc file video.
 `plc_config.json`, `roi_config.json`. File thiếu/hỏng → tự tạo mặc định, key lạ bị bỏ qua. Mọi nút **Apply & Save**
 ghi ngay ra JSON; khi đóng app cũng lưu.
 
-## 12. Kiểm thử
+## 12. Kiểm tra hệ thống chạy đúng
 
-```bat
-pip install -r requirements-dev.txt
-python -m pytest tests -q
-```
+Bộ unit test đã được gỡ khỏi project theo yêu cầu (vẫn còn trong lịch sử git nếu cần lấy lại).
+Cách kiểm tra nhanh bằng chính ứng dụng:
 
-33 test: geometry (point-in-polygon lõm, clipping, intersection ratio), debounce/state machine, ROI processor + exclusion,
-MC Protocol frame Binary/ASCII, driver thật ↔ `tools/mc_plc_simulator.py`, PLC mapper (mutual exclusion, fail-safe,
-chỉ ghi khi đổi, heartbeat), config round-trip.
+**Không cần camera, không cần PLC** – tab *1 Camera* đặt `Event provider = Simulated events`,
+tab *4 PLC* giữ `PLC SIMULATION: ON`, nhấn **START SYSTEM**, rồi sang tab *2 AI Event* bấm:
 
-### Acceptance test (đã chạy tự động headless với video có 4 người)
+| Bấm | Phải thấy |
+|---|---|
+| **Person Enter** | AREA OCCUPIED, `M100 -> ON`, bit của vùng (vd `M200 -> ON`) |
+| **Person Exit** | sau OFF delay: AREA CLEAR, `M100 -> OFF` |
+| **Vehicle** | event hiện trong monitor nhưng PLC **không đổi** |
+| **Disconnect** | FAULT, `M104 -> ON`, `M100` giữ nguyên (không CLEAR giả) |
+| **Reconnect** | hết FAULT |
 
-| # | Kịch bản | Kết quả |
-|---|---|---|
-| 1 | Không người → AREA CLEAR, M100=OFF, M101=ON | ✔ |
-| 2 | Người vào ROI → sau ON delay AREA OCCUPIED, M100=ON | ✔ (0.24 s) |
-| 3 | YOLO mất 1–2 frame → M100 vẫn ON | ✔ (unit test PENDING_CLEAR) |
-| 4 | Người rời ROI → sau OFF delay M100=OFF | ✔ (1.03 s) |
-| 5 | Người ngoài ROI → M100=OFF | ✔ |
-| 6 | Người trong exclusion → IGNORED, M100=OFF | ✔ |
-| 7 | 2+ người, ≥1 trong ROI → M100=ON | ✔ |
-| 8 | Camera disconnect → FAULT, M104=ON, không tự CLEAR | ✔ |
-| 9 | PLC disconnect → UI không treo, báo PLC DISCONNECTED, tự nối lại | ✔ |
-| 10 | Video file thay camera – toàn bộ pipeline | ✔ |
+**Có camera AI thật** – nhập IP/user/password ở tab *1 Camera*, bấm lần lượt **Test Camera** →
+**Test RTSP** → **Test Event**, rồi đi vào vùng giám sát và xem tab *2 AI Event*. Nếu không có event
+nào, mở trang **RAW EVENT** để biết camera có gửi gì không.
 
-Chế độ **AI Camera** (chạy với mock provider + qua UI thật):
+**Có PLC thật** – tab *4 PLC* tắt simulation, nhập IP/port, **Test Connection**, rồi dùng tab *I/O*
+để ghi thử `M100 ON/OFF` trước khi chạy AI.
 
-| # | Kịch bản | Kết quả |
-|---|---|---|
-| 1 | Kênh event ONLINE, không alarm → AREA CLEAR, M100=OFF M101=ON | ✔ |
-| 2 | Camera báo người vào vùng → sau ON delay AREA OCCUPIED | ✔ |
-| 3 | PLC: M100=ON, M200=ON (Robot Zone), D100=1 | ✔ |
-| 4 | Hai người vào, một người ra → vẫn OCCUPIED (đếm người) | ✔ |
-| 5 | Người cuối rời vùng → sau OFF delay AREA CLEAR, M100=OFF | ✔ |
-| 6 | Event mục tiêu là **vehicle** → bỏ qua, M100 vẫn OFF | ✔ |
-| 7 | Hai vùng độc lập: M200 ↔ M201 không ảnh hưởng nhau | ✔ |
-| 8 | Mất kênh event → FAULT, M104=ON, M100 **giữ nguyên**, không CLEAR giả | ✔ |
-| 9 | Kênh event trở lại → hết FAULT | ✔ |
-| 10 | Đổi sang PC AI / YOLO rồi quay lại: kênh event tắt/bật đúng | ✔ |
-| 11 | Camera không tới được (IP sai) → worker vẫn sống, UI không treo | ✔ |
+**PLC giả lập qua TCP** (không cần PLC): `python tools/mc_plc_simulator.py --port 5000`, sau đó tắt
+simulation và trỏ app vào `127.0.0.1:5000`. Mọi lệnh ghi sẽ in ra console.
 
 ## 13. Troubleshooting
 

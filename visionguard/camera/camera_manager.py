@@ -46,7 +46,7 @@ class CameraManager:
                 # Simulated events with no camera on the desk: keep showing the local
                 # webcam or video file so the whole chain can still be demonstrated.
                 return self.create_camera(config)
-            return RtspVideoReceiver(ai.to_rtsp_config())
+            return RtspVideoReceiver(ai.to_rtsp_config(config.brand))
         return self.create_camera(config)
 
     def create_camera(self, config: CameraConfig) -> BaseCamera:
