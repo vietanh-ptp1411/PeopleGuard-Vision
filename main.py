@@ -52,12 +52,14 @@ def main() -> int:
 
     from visionguard.app.main_window import MainWindow
     from visionguard.app.theme import apply_theme
+    from visionguard.app.wheel_guard import install as install_wheel_guard
 
     QApplication.setHighDpiScaleFactorRoundingPolicy(Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
     app = QApplication(sys.argv)
     app.setApplicationName("VisionGuard")
     app.setOrganizationName("VisionGuard")
     apply_theme(app)
+    install_wheel_guard(app)   # scrolling a settings page must never change a value
 
     window = MainWindow(cm)
     window.showMaximized()   # industrial HMI: always start on the full screen (F11 = borderless)

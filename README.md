@@ -176,6 +176,9 @@ Giao diện sáng (light industrial), bố cục cố định:
  duoi       SYSTEM LOG (auto scroll)           |  status bar: thong bao + canh bao an toan
 ```
 
+Lăn chuột trên trang cấu hình chỉ cuộn trang, **không làm đổi giá trị** của ô số hay danh sách
+(muốn đổi thì bấm vào ô trước). Đây là lỗi hay gặp làm sai port camera mà không ai biết.
+
 **Thanh 5 bước** ngay dưới toolbar là phần quan trọng nhất khi thao tác: mỗi bước hiện trạng thái
 (`xám` = chưa làm, `xanh dương` = đang làm, `xanh lá ✓` = xong, `vàng/đỏ` = thiếu hoặc lỗi) kèm mô tả
 ngắn, ví dụ *Camera – Streaming*, *ROI Zones – 1 zone(s) + 1 exclusion*, *Run – Press START SYSTEM (F5)*.
