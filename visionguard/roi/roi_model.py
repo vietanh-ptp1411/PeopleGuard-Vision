@@ -60,6 +60,7 @@ class Roi:
             "type": self.type.value,
             "enabled": bool(self.enabled),
             "points": [[round(float(x), 5), round(float(y), 5)] for x, y in self.points],
+            "camera": int(self.camera),
         }
         if self.color:
             d["color"] = self.color
@@ -86,6 +87,7 @@ class Roi:
             points=pts,
             color=str(d.get("color", "") or ""),
             plc_device=str(d.get("plc_device", "") or "").upper(),
+            camera=int(d.get("camera", 0) or 0),
         )
 
 
