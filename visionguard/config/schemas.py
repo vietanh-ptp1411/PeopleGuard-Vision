@@ -431,20 +431,34 @@ class PlcConnectionConfig:
 
 @dataclass
 class PlcMappingConfig:
-    device_person: str = "M100"        # PERSON_PRESENT / AREA_OCCUPIED
-    device_clear: str = "M101"         # AREA_CLEAR (dual-bit mode)
-    device_camera_ok: str = "M102"     # Camera connected
-    device_ai_running: str = "M103"    # AI running
-    device_fault: str = "M104"         # System fault
-    device_heartbeat: str = "M110"
-    device_status_word: str = "D100"   # 0 CLEAR,1 OCCUPIED,2 CAMERA ERR,3 PLC ERR,4 AI ERR,5 STOPPED
-    write_roi_devices: bool = True     # also write each ROI's own plc_device
+    """Two devices by default, because two is what a ladder actually needs.
+
+    An empty name means "do not write this at all". The diagnostic bits and the status
+    word are still here for a site that wants them - fill the field in and they come
+    back - but a fresh install writes the person bit and the heartbeat and nothing else.
+    """
+    device_person: str = "M100"        # 1 while somebody is inside a monitored zone
+    device_heartbeat: str = "M110"     # toggles while the system is alive AND can see
+    device_clear: str = ""             # AREA_CLEAR, only used in dual-bit mode
+    device_camera_ok: str = ""         # Camera connected
+    device_ai_running: str = ""        # AI running
+    device_fault: str = ""             # System fault
+    device_status_word: str = ""       # 0 CLEAR,1 OCCUPIED,2 CAMERA ERR,3 PLC ERR,4 AI ERR,5 STOPPED
+    write_roi_devices: bool = False    # also write each ROI's own plc_device
 
 
 @dataclass
 class HeartbeatConfig:
     enabled: bool = True
     interval_ms: int = 500
+    #: Freeze the heartbeat while the system cannot see.
+    #:
+    #: With a person bit and nothing else, a dead camera reads exactly like an empty
+    #: zone - the bit sits at 0 and the machine keeps running while nobody is watching.
+    #: That is the failure that hurts somebody. Stopping the heartbeat instead means the
+    #: watchdog the PLC already needs for the heartbeat to be worth anything catches a
+    #: blind camera too, without spending a third device on it.
+    stop_on_fault: bool = True
 
 
 @dataclass
@@ -456,8 +470,8 @@ class FailSafeConfig:
 @dataclass
 class PlcConfig:
     simulation_mode: bool = True
-    signal_mode: str = SignalMode.DUAL_BIT.value
-    word_output_enabled: bool = True
+    signal_mode: str = SignalMode.SINGLE_BIT.value
+    word_output_enabled: bool = False
     connection: PlcConnectionConfig = field(default_factory=PlcConnectionConfig)
     mapping: PlcMappingConfig = field(default_factory=PlcMappingConfig)
     heartbeat: HeartbeatConfig = field(default_factory=HeartbeatConfig)
