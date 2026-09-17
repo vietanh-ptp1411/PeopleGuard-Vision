@@ -904,7 +904,11 @@ class SystemController(QObject):
             if self._last_result is not None and now - self._last_result_time > RESULT_TIMEOUT_S:
                 self._ai_error = f"No AI result for {RESULT_TIMEOUT_S:.0f}s"
                 self._recompute()
-            elif self._last_result is None and now - self._start_time > STARTUP_GRACE_S:
+            elif (self._last_result is None and not self._start_detection_when_loaded
+                  and now - self._start_time > STARTUP_GRACE_S):
+                # Loading the model is not a fault. On a CPU-only machine the first load
+                # plus warm-up runs past ten seconds, and reporting FAULT there would raise
+                # the PLC's fault bit on every single boot.
                 self._ai_error = f"No AI result {STARTUP_GRACE_S:.0f}s after start"
                 self._recompute()
         elif self._system_running and self._last_result is None and time.monotonic() - self._start_time > STARTUP_GRACE_S:

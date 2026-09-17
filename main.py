@@ -11,10 +11,14 @@ import os
 import sys
 from pathlib import Path
 
-# Run relative to the project folder so models/, config/, logs/, events/ resolve predictably.
-PROJECT_DIR = Path(__file__).resolve().parent
+# Run relative to the application folder so models/, config/, logs/, events/ resolve
+# predictably: beside the exe when frozen, beside this file when run from source.
+if getattr(sys, "frozen", False):
+    PROJECT_DIR = Path(sys.executable).resolve().parent
+else:
+    PROJECT_DIR = Path(__file__).resolve().parent
+    sys.path.insert(0, str(PROJECT_DIR))
 os.chdir(PROJECT_DIR)
-sys.path.insert(0, str(PROJECT_DIR))
 
 # Reduce OpenCV/FFmpeg console noise and prefer TCP for RTSP unless overridden later by config.
 os.environ.setdefault("OPENCV_LOG_LEVEL", "ERROR")
@@ -36,7 +40,13 @@ def main() -> int:
     parser.add_argument("--config-dir", default="config")
     parser.add_argument("--autostart", action="store_true",
                         help="begin monitoring as soon as the window is up (unattended sites)")
+    parser.add_argument("--check", action="store_true",
+                        help="run the pre-flight check and exit (0 ready, 1 fault, 2 warnings)")
     args = parser.parse_args()
+
+    if args.check:
+        from visionguard.diagnostics.preflight import main as preflight_main
+        return preflight_main(args.config_dir)
 
     from visionguard.config.config_manager import ConfigManager
 
