@@ -35,6 +35,7 @@ class PipelineResult:
     pipeline_ms: float
     ai_fps: float
     timestamp: float = field(default_factory=time.time)
+    camera: int = 0                  # which camera this result came from
 
     @property
     def roi_occupied(self) -> Dict[str, bool]:
@@ -42,10 +43,11 @@ class PipelineResult:
 
 
 class ProcessingPipeline:
-    def __init__(self, roi_manager: RoiManager, logic: LogicConfig) -> None:
+    def __init__(self, roi_manager: RoiManager, logic: LogicConfig, camera: int = 0) -> None:
         self._roi_manager = roi_manager
+        self.camera = int(camera)
         self._lock = threading.RLock()
-        self._rois: Tuple[Roi, ...] = roi_manager.snapshot()
+        self._rois: Tuple[Roi, ...] = tuple(roi_manager.for_camera(self.camera))
         self._processor = RoiProcessor(logic.mode_enum, logic.intersection_threshold)
         self._tracker = OccupancyTracker(self._debounce(logic))
         self._fps = FpsCounter()
@@ -58,8 +60,9 @@ class ProcessingPipeline:
 
     # ------------------------------------------------------------------ config
     def refresh_rois(self) -> None:
+        """Only this camera's zones: each camera in the group owns its own area."""
         with self._lock:
-            self._rois = self._roi_manager.snapshot()
+            self._rois = tuple(self._roi_manager.for_camera(self.camera))
 
     def set_logic(self, logic: LogicConfig) -> None:
         with self._lock:
@@ -104,6 +107,7 @@ class ProcessingPipeline:
             roi_states=roi_states,
             rois=rois,
             inference_ms=self._infer_avg.value,
+            camera=self.camera,
             pipeline_ms=(time.perf_counter() - t0) * 1000.0,
             ai_fps=fps,
         )

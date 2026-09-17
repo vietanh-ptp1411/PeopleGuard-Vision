@@ -9,6 +9,7 @@ Files:
 """
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import List
@@ -241,6 +242,26 @@ class AiCameraConfig:
         )
 
 
+#: how many cameras one VisionGuard instance can watch at once
+MAX_CAMERAS = 4
+
+
+@dataclass
+class ExtraCamera:
+    """Camera 2..N: only the settings that differ from camera to camera.
+
+    Detection mode, brand and the reconnect policy stay on CameraConfig and are shared by
+    every camera in the group.
+    """
+    name: str = ""
+    camera_type: str = CameraType.RTSP.value
+    ai_camera: AiCameraConfig = field(default_factory=AiCameraConfig)
+    usb: UsbCameraConfig = field(default_factory=UsbCameraConfig)
+    video: VideoCameraConfig = field(default_factory=VideoCameraConfig)
+    rtsp: RtspCameraConfig = field(default_factory=RtspCameraConfig)
+    industrial: IndustrialCameraConfig = field(default_factory=IndustrialCameraConfig)
+
+
 @dataclass
 class CameraConfig:
     detection_mode: str = DetectionMode.AI_CAMERA.value   # AI camera first, YOLO stays available
@@ -252,6 +273,9 @@ class CameraConfig:
     rtsp: RtspCameraConfig = field(default_factory=RtspCameraConfig)
     industrial: IndustrialCameraConfig = field(default_factory=IndustrialCameraConfig)
     reconnect: ReconnectConfig = field(default_factory=ReconnectConfig)
+    name: str = ""                                        # label on the video tile
+    count: int = 1                                        # how many cameras watch the area
+    extra: List[ExtraCamera] = field(default_factory=list)  # cameras 2..N
 
     @property
     def type_enum(self) -> CameraType:
@@ -277,6 +301,55 @@ class CameraConfig:
     @property
     def is_ai_camera(self) -> bool:
         return self.mode_enum == DetectionMode.AI_CAMERA
+
+    # ------------------------------------------------------------------ multi camera
+    @property
+    def camera_count(self) -> int:
+        """1..MAX_CAMERAS, whatever the file says."""
+        return max(1, min(int(self.count or 1), MAX_CAMERAS))
+
+    def set_count(self, count: int) -> None:
+        """Grow or shrink the group, keeping the cameras that are already configured."""
+        count = max(1, min(int(count), MAX_CAMERAS))
+        self.count = count
+        while len(self.extra) < count - 1:
+            self.extra.append(ExtraCamera(camera_type=self.camera_type))
+        del self.extra[count - 1:]
+
+    def label(self, index: int) -> str:
+        name = (self.name if index == 0 else self._extra(index).name).strip()
+        return name or f"Camera {index + 1}"
+
+    def _extra(self, index: int) -> ExtraCamera:
+        slot = index - 1
+        while len(self.extra) <= slot:
+            self.extra.append(ExtraCamera(camera_type=self.camera_type))
+        return self.extra[slot]
+
+    def unit(self, index: int) -> "CameraConfig":
+        """A standalone CameraConfig for camera `index` (0 = this one).
+
+        Workers take a plain CameraConfig, so each camera in the group is handed its own
+        copy with the shared settings folded in and its own source settings on top.
+        """
+        if index <= 0:
+            unit = deepcopy(self)
+        else:
+            src = self._extra(index)
+            unit = deepcopy(self)
+            unit.camera_type = src.camera_type
+            unit.ai_camera = deepcopy(src.ai_camera)
+            unit.usb = deepcopy(src.usb)
+            unit.video = deepcopy(src.video)
+            unit.rtsp = deepcopy(src.rtsp)
+            unit.industrial = deepcopy(src.industrial)
+            unit.name = src.name
+        unit.count = 1
+        unit.extra = []
+        return unit
+
+    def units(self) -> List["CameraConfig"]:
+        return [self.unit(i) for i in range(self.camera_count)]
 
     def describe_source(self) -> str:
         """One line naming where the picture comes from, for the live view header."""

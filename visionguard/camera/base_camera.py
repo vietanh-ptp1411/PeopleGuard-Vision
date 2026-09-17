@@ -16,6 +16,7 @@ class Frame:
     frame_id: int
     timestamp: float             # time.time() at capture
     source: str = ""
+    camera: int = 0              # which camera in the group produced it
 
     @property
     def width(self) -> int:

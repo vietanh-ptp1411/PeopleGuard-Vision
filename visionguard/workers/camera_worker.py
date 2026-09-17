@@ -41,11 +41,13 @@ class CameraWorker(QThread):
     fps_changed = Signal(float)
     video_position = Signal(int, int)         # current, total (video files)
 
-    def __init__(self, manager: CameraManager, buffer: LatestFrameBuffer, config: CameraConfig) -> None:
+    def __init__(self, manager: CameraManager, buffer: LatestFrameBuffer, config: CameraConfig,
+                 index: int = 0) -> None:
         super().__init__()
         self._manager = manager
         self._buffer = buffer
         self._config = config
+        self.index = int(index)      # which camera of the group this worker drives
         self._camera: Optional[BaseCamera] = None
         self._commands: "queue.Queue[Tuple[str, Any]]" = queue.Queue()
         self._running = True
@@ -208,6 +210,7 @@ class CameraWorker(QThread):
         cam.stop()
         cam.disconnect()
         if frame is not None:
+            frame.camera = self.index
             self.frame_ready.emit(frame)
             self.state_changed.emit("TEST_OK", f"Test OK: {info.summary()} ({(time.perf_counter() - t0) * 1000:.0f} ms)")
         else:
@@ -242,6 +245,7 @@ class CameraWorker(QThread):
         now = time.monotonic()
         if frame is not None:
             self._last_frame_time = now
+            frame.camera = self.index      # the index travels with the picture
             self._buffer.put(frame)
             self.frame_ready.emit(frame)
             self._fps.tick(now)

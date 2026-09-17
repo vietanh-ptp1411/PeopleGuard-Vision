@@ -29,6 +29,7 @@ class Roi:
     points: List[NormPoint] = field(default_factory=list)   # normalized (x/w, y/h)
     color: str = ""                                          # empty -> theme default
     plc_device: str = ""                                     # e.g. "M100" (include ROIs only)
+    camera: int = 0                                          # which camera this zone is drawn on
 
     # ------------------------------------------------------------------ helpers
     @property
