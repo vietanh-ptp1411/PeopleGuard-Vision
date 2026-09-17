@@ -36,6 +36,8 @@ class PlcWorker(QThread):
         self._last_mem_emit = 0.0
         self._last_mem: Dict[str, int] = {}
         self._last_latency_emit = 0.0
+        #: The last health the controller reported. The heartbeat is gated on it.
+        self._healthy = False
 
     # ------------------------------------------------------------------ API (any thread)
     @property
@@ -158,17 +160,30 @@ class PlcWorker(QThread):
         if not self._manager.is_connected():
             self._manager._last_state = state  # remember for resync after reconnect
             return
+        # A heartbeat that keeps ticking while the camera is dead tells the PLC the
+        # zone is being watched when it is not. Remember the health and gate on it.
+        self._healthy = bool(state.running and not state.fault)
         written = self._manager.apply_state(state)
         for dev, val in written:
             self.device_written.emit(dev, val)
         if written:
             self._emit_memory(force=True)
 
+    def _heartbeat_frozen(self) -> bool:
+        """True while the heartbeat must stand still because the system cannot see.
+
+        This is what makes a two-device interface safe. With only a person bit, a dead
+        camera and an empty zone look identical on the wire - both read 0. Freezing the
+        heartbeat instead lets the watchdog the PLC already needs catch a blind camera,
+        and costs no extra device.
+        """
+        return self._manager.cfg.heartbeat.stop_on_fault and not self._healthy
+
     def _periodic(self) -> None:
         now = time.monotonic()
         if self._manager.is_connected():
             try:
-                hb = self._manager.heartbeat_tick(now)
+                hb = None if self._heartbeat_frozen() else self._manager.heartbeat_tick(now)
                 if hb is not None:
                     self.heartbeat_toggled.emit(hb)
                     self.device_written.emit(self._manager.cfg.mapping.device_heartbeat, int(hb))

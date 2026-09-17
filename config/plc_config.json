@@ -1,7 +1,7 @@
 {
-  "simulation_mode": false,
-  "signal_mode": "dual_bit",
-  "word_output_enabled": true,
+  "simulation_mode": true,
+  "signal_mode": "single_bit",
+  "word_output_enabled": false,
   "connection": {
     "plc_type": "mitsubishi",
     "protocol": "mc_protocol",
@@ -25,17 +25,18 @@
   },
   "mapping": {
     "device_person": "M100",
-    "device_clear": "M101",
-    "device_camera_ok": "M102",
-    "device_ai_running": "M103",
-    "device_fault": "M104",
+    "device_clear": "",
+    "device_camera_ok": "",
+    "device_ai_running": "",
+    "device_fault": "",
     "device_heartbeat": "M110",
-    "device_status_word": "D100",
-    "write_roi_devices": true
+    "device_status_word": "",
+    "write_roi_devices": false
   },
   "heartbeat": {
     "enabled": true,
-    "interval_ms": 500
+    "interval_ms": 500,
+    "stop_on_fault": true
   },
   "failsafe": {
     "person_output_on_fault": "hold",

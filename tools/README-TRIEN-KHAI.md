@@ -285,3 +285,44 @@ giữ ảnh mới nhất — bỏ qua một ảnh xem trước không bao giờ 
 `multicam_ux`, `layout_stability`, `clip_recording`, `clip_ui`, `roi_persist`,
 `widget_interaction`, `ai_camera_e2e`, `ai_ui_test`, `header_shot`, `window_shot`,
 `deploy_check`.
+
+---
+
+# Giao diện PLC — chỉ 2 thiết bị
+
+| Thiết bị | Ý nghĩa |
+|---|---|
+| **M100** | `1` khi có người trong vùng giám sát, `0` khi vùng trống |
+| **M110** | Đảo trạng thái mỗi 500 ms khi hệ thống **đang chạy VÀ nhìn được** |
+
+Không ghi gì khác. Trước đây có thêm M101 (vùng trống), M102 (camera OK), M103 (AI chạy),
+M104 (lỗi), D100 (từ trạng thái) và M200+ (từng vùng) — đã bỏ.
+
+## Nhịp tim mang luôn ý nghĩa sức khoẻ
+
+Đây là điểm quan trọng nhất của thiết kế 2 bit. M110 **đứng lại** khi:
+
+- Camera chết hoặc mất kết nối
+- Model AI hỏng
+- Người vận hành bấm STOP
+- Phần mềm treo hoặc tắt
+
+Lý do: nếu chỉ đọc M100 thì **camera chết trông y hệt vùng trống** — cả hai đều là `0`.
+Máy chạy tiếp trong khi không ai nhìn cái vùng đó. Đó đúng là kiểu hỏng làm người ta bị
+thương. Đóng băng nhịp tim để watchdog mà PLC vốn đã phải có bắt được luôn trường hợp
+camera mù, không tốn thêm bit nào.
+
+## Ladder cần viết
+
+```
+Nếu M110 KHÔNG đổi trạng thái trong 2 giây  →  coi như hệ thống mù  →  xử lý như có người
+Nếu M100 = 1                                →  có người trong vùng  →  dừng máy
+```
+
+Chỉ đọc M100 mà bỏ qua watchdog M110 là **bỏ mất toàn bộ khả năng phát hiện camera hỏng**.
+
+## Lấy lại các bit cũ nếu cần
+
+Chúng không bị xoá khỏi code, chỉ để trống trong cấu hình. Vào tab **PLC**, điền tên thiết
+bị vào ô tương ứng là nó ghi trở lại. Cờ `heartbeat.stop_on_fault` trong
+`config/plc_config.json` đặt `false` nếu muốn nhịp tim chạy tự do như trước.
