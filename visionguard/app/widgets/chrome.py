@@ -13,9 +13,10 @@ instead of five boxes, and silent while everything is healthy.
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QFontMetrics, QMouseEvent
+from PySide6.QtGui import QFontMetrics, QGuiApplication, QMouseEvent, QPixmap
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QPushButton, QSizePolicy, QVBoxLayout, QWidget
 
+from ...utils.paths import asset_path
 from ..theme import (COLOR_BORDER, COLOR_ERROR, COLOR_ERROR_SOFT, COLOR_HEADER_DIM, COLOR_TEXT_DIM,
                      COLOR_TEXT_MUTED, COLOR_WARN, COLOR_WARN_SOFT, contrast_text, state_colors, status_caption,
                      status_color)
@@ -53,24 +54,66 @@ class ElidedLabel(QLabel):
 
 
 # --------------------------------------------------------------------------- app bar
+BAR_HEIGHT = 64
+LOGO_HEIGHT = 28
+
+
+def _load_logo(height: int) -> QPixmap | None:
+    """The company wordmark, rendered for this screen's pixel density.
+
+    Scaling a 160px-tall source down to 28 logical pixels is what keeps the letters
+    crisp; handing Qt the raw file and letting the label squash it is what makes a
+    logo look cheap. Returns None if the asset is missing so the bar still builds.
+    """
+    path = asset_path("company_logo.png")
+    if not path.exists():
+        return None
+    source = QPixmap(str(path))
+    if source.isNull():
+        return None
+    screen = QGuiApplication.primaryScreen()
+    ratio = screen.devicePixelRatio() if screen is not None else 1.0
+    scaled = source.scaledToHeight(max(1, round(height * ratio)),
+                                   Qt.TransformationMode.SmoothTransformation)
+    scaled.setDevicePixelRatio(ratio)
+    return scaled
+
+
+def _divider() -> QFrame:
+    """A hairline that separates one group in the app bar from the next."""
+    line = QFrame()
+    line.setProperty("class", "headerline")
+    line.setFixedWidth(1)
+    line.setFixedHeight(32)
+    return line
+
+
 class AppBar(QFrame):
-    """Dark identity bar: product name, what it is monitoring, detection mode, clock."""
+    """Dark identity bar: who made it, what it is, and what state it is in.
+
+    Three groups rather than five floating pieces - company mark and product name on
+    the left, detection mode and clock on the right, and the gap between them left
+    empty. The simulation badge sits in amber because it is a warning, not a label.
+    """
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setObjectName("AppBar")
-        self.setFixedHeight(56)
+        self.setFixedHeight(BAR_HEIGHT)
         lay = QHBoxLayout(self)
-        lay.setContentsMargins(16, 0, 16, 0)
-        lay.setSpacing(12)
+        lay.setContentsMargins(14, 0, 18, 0)
+        lay.setSpacing(13)
 
-        mark = QLabel("◉")
-        mark.setStyleSheet("color: #3D8BFD; font-size: 19pt;")
-        lay.addWidget(mark)
+        # Every item is centred explicitly. Without an alignment a QHBoxLayout stretches
+        # its widgets to the full bar height, which turns the pills into slabs and the
+        # logo plate into a white block running edge to edge.
+        middle = Qt.AlignmentFlag.AlignVCenter
+        lay.addWidget(self._company_mark(), 0, middle)
+        lay.addWidget(_divider(), 0, middle)
 
         block = QVBoxLayout()
         block.setContentsMargins(0, 0, 0, 0)
-        block.setSpacing(0)
+        block.setSpacing(1)
         name = QLabel("VisionGuard")
         name.setProperty("class", "brand")
         sub = QLabel("Person-in-Area Monitoring")
@@ -79,24 +122,53 @@ class AppBar(QFrame):
         block.addWidget(sub)
         lay.addLayout(block)
 
-        lay.addSpacing(8)
+        lay.addStretch(1)
+
         self.badge_mode = QLabel("AI CAMERA")
         self.badge_mode.setProperty("class", "headerbadge")
         self.badge_mode.setToolTip("Nguồn phát hiện người đang dùng")
-        lay.addWidget(self.badge_mode)
+        lay.addWidget(self.badge_mode, 0, middle)
 
         self.badge_plc = QLabel("PLC SIMULATION")
         self.badge_plc.setProperty("class", "headerbadge")
+        self.badge_plc.setProperty("tone", "warn")
         self.badge_plc.setToolTip("PLC đang chạy ở chế độ mô phỏng, không ghi ra thiết bị thật")
-        lay.addWidget(self.badge_plc)
+        lay.addWidget(self.badge_plc, 0, middle)
         self.badge_plc.hide()
 
-        lay.addStretch(1)
+        lay.addWidget(_divider(), 0, middle)
 
-        self.lbl_clock = QLabel("")
-        self.lbl_clock.setProperty("class", "clock")
-        self.lbl_clock.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        lay.addWidget(self.lbl_clock)
+        clock = QVBoxLayout()
+        clock.setContentsMargins(0, 0, 0, 0)
+        clock.setSpacing(0)
+        self.lbl_time = QLabel("")
+        self.lbl_time.setProperty("class", "clocktime")
+        self.lbl_date = QLabel("")
+        self.lbl_date.setProperty("class", "clockdate")
+        for label in (self.lbl_time, self.lbl_date):
+            label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            clock.addWidget(label)
+        lay.addLayout(clock)
+
+    def _company_mark(self) -> QFrame:
+        """The company wordmark on a white plate, or its name if the file is missing."""
+        plate = QFrame()
+        plate.setProperty("class", "logoplate")
+        plate.setToolTip("MVA LAB - Tech for Solution")
+        inner = QHBoxLayout(plate)
+        inner.setContentsMargins(11, 5, 11, 5)
+        inner.setSpacing(0)
+
+        label = QLabel()
+        pixmap = _load_logo(LOGO_HEIGHT)
+        if pixmap is not None:
+            label.setPixmap(pixmap)
+        else:
+            label.setText("MVA LAB")
+            label.setStyleSheet("color: #1436C8; font-size: 13pt; font-weight: 800;"
+                                " letter-spacing: 1px; background: transparent;")
+        inner.addWidget(label)
+        return plate
 
     def set_mode(self, text: str) -> None:
         self.badge_mode.setText(text)
@@ -104,8 +176,9 @@ class AppBar(QFrame):
     def set_simulation(self, on: bool) -> None:
         self.badge_plc.setVisible(on)
 
-    def set_clock(self, text: str) -> None:
-        self.lbl_clock.setText(text)
+    def set_clock(self, time_text: str, date_text: str = "") -> None:
+        self.lbl_time.setText(time_text)
+        self.lbl_date.setText(date_text)
 
 
 # --------------------------------------------------------------------------- area banner

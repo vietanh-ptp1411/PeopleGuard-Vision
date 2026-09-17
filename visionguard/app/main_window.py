@@ -435,7 +435,8 @@ class MainWindow(QMainWindow):
             self.showFullScreen()
 
     def _update_clock(self) -> None:
-        self.appbar.set_clock(datetime.now().strftime("%d/%m/%Y   %H:%M:%S"))
+        now = datetime.now()
+        self.appbar.set_clock(now.strftime("%H:%M:%S"), now.strftime("%d/%m/%Y"))
 
     def _show_message(self, text: str) -> None:
         self.statusBar().showMessage(text, 10000)

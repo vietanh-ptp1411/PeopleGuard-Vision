@@ -21,6 +21,11 @@ datas = []
 # Ultralytics reads yaml out of its own package at runtime (default.yaml, trackers).
 datas += collect_data_files("ultralytics", include_py_files=False)
 
+# The company wordmark in the app bar. collect_submodules brings the code but not the
+# picture, and a missing file would quietly drop the logo out of the frozen build.
+datas += [(str(ROOT / "visionguard" / "app" / "assets" / "company_logo.png"),
+           "visionguard/app/assets")]
+
 # torchvision registers its custom operators (nms among them) from a compiled extension.
 # PyInstaller does not pick that up on its own, and without it the model loads and then
 # dies at the first inference with "operator torchvision::nms does not exist".

@@ -25,3 +25,8 @@ def resource_dir() -> Path:
     """Read-only files shipped inside the bundle (source tree: the same folder)."""
     base = getattr(sys, "_MEIPASS", None)
     return Path(base) if base else app_dir()
+
+
+def asset_path(name: str) -> Path:
+    """A file shipped in `visionguard/app/assets` - the logo and anything like it."""
+    return resource_dir() / "visionguard" / "app" / "assets" / name
