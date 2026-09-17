@@ -24,7 +24,7 @@ from pathlib import Path
 
 from PySide6.QtCore import Qt, QTimer, QUrl
 from PySide6.QtGui import QAction, QCloseEvent, QDesktopServices, QKeySequence
-from PySide6.QtWidgets import (QFrame, QHBoxLayout, QLabel, QMainWindow, QMessageBox, QPushButton, QSplitter,
+from PySide6.QtWidgets import (QApplication, QFrame, QHBoxLayout, QLabel, QMainWindow, QMessageBox, QPushButton, QSplitter,
                                QTabWidget, QVBoxLayout, QWidget)
 
 from ..camera.events.camera_event import CameraEvent
@@ -811,5 +811,10 @@ class MainWindow(QMainWindow):
                 self.ctrl.roi_manager.save()
         except Exception as exc:
             log.error("Saving configuration on exit failed: %s", exc)
+        # Go off screen before shutting the workers down. If the model happens to be
+        # loading, shutdown has to outwait it - ten seconds or so - and without this the
+        # operator sits looking at a frozen window wondering what he broke.
+        self.hide()
+        QApplication.processEvents()
         self.ctrl.shutdown()
         super().closeEvent(event)
