@@ -12,8 +12,13 @@ __pycache__/
 
 # Build artefacts - the bundle is ~900 MB and the installer ~380 MB
 /build/venv/
+/build/venv-gpu/
 /build/dist/
+/build/dist-gpu/
+/build/dist-cpu/
 /build/work/
+/build/work-gpu/
+/build/work-cpu/
 /build/staging/
 /build/payload.zip
 /release/
