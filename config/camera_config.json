@@ -23,8 +23,8 @@
     ],
     "channels": [],
     "logic": {
-      "on_delay_ms": 200,
-      "off_delay_ms": 800,
+      "on_delay_ms": 20,
+      "off_delay_ms": 1000,
       "clear_timeout_s": 5.0,
       "line_cross_hold_s": 3.0,
       "use_person_count": true,
