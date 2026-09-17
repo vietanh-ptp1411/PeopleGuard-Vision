@@ -13,6 +13,8 @@ import logging
 import xml.etree.ElementTree as ET
 from typing import Iterator, Optional, Tuple
 
+from ....utils.redact import mask_url  # noqa: F401 (re-exported for existing imports)
+
 log = logging.getLogger("EVENT")
 
 try:  # optional at import time, required for AI Camera mode
@@ -55,14 +57,7 @@ def short_error(exc: Exception, host: str = "") -> str:
     return f"{name}: {text[:120]}"
 
 
-def mask_url(url: str) -> str:
-    """Never let credentials reach the log or the UI."""
-    if "@" in url and "//" in url:
-        head, tail = url.split("//", 1)
-        creds, rest = tail.split("@", 1)
-        user = creds.split(":", 1)[0]
-        return f"{head}//{user}:***@{rest}"
-    return url
+
 
 
 class IsapiError(Exception):
