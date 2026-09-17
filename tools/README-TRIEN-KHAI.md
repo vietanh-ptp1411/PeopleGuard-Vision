@@ -326,3 +326,50 @@ Chỉ đọc M100 mà bỏ qua watchdog M110 là **bỏ mất toàn bộ khả n
 Chúng không bị xoá khỏi code, chỉ để trống trong cấu hình. Vào tab **PLC**, điền tên thiết
 bị vào ô tương ứng là nó ghi trở lại. Cờ `heartbeat.stop_on_fault` trong
 `config/plc_config.json` đặt `false` nếu muốn nhịp tim chạy tự do như trước.
+
+---
+
+# Mở app là chạy — không cần bấm gì
+
+Hai cài đặt, cả hai đã bật sẵn:
+
+| Cài đặt | File | Ý nghĩa |
+|---|---|---|
+| `detector.auto_load_on_start` | `config/ai_config.json` | Nạp model ngay khi mở app, không đợi START |
+| `app.autostart` | `config/app_config.json` | Tự bắt đầu giám sát, không cần ai bấm START |
+| `app.autostart_timeout_s` | `config/app_config.json` | Hạn chót 25 giây — model hỏng thì vẫn phải khởi động |
+
+Cờ dòng lệnh `--autostart` vẫn dùng được, giờ là cách ghi đè chứ không phải cách duy nhất.
+
+## Vì sao bỏ mốc chờ 3 giây cũ
+
+Trước đây tự start sau đúng 3 giây. Đó là phỏng đoán sai cả hai chiều: quá sớm khi máy
+nguội (model mất 12 giây), quá muộn khi máy nóng (model xong sau 2 giây). Giờ hệ thống
+**chờ model thật sự sẵn sàng rồi mới bắt đầu** — đo được 0,02 giây giữa hai mốc.
+
+Vẫn có hạn chót, vì một model hỏng vĩnh viễn không được phép biến thành một hệ thống
+không bao giờ khởi động: camera vẫn chạy và người vận hành vẫn cần thấy báo lỗi.
+
+## Nạp model mất bao lâu, và vì sao không thể nhanh hơn
+
+Đo trên máy rảnh, bản CPU:
+
+| Giai đoạn | Thời gian |
+|---|---|
+| `import torch` | 1,62s |
+| warm-up — lần suy diễn đầu tiên | 1,64s |
+| đọc file `.pt` | 0,05s |
+| suy diễn thật (mỗi khung sau đó) | 0,06s |
+| **Tổng** | **3,63s** |
+
+Hai mục đầu chiếm 90%. Đã thử thu ảnh warm-up từ 640×640 xuống 64×64: **vẫn tốn 1,62s** —
+đó là chi phí khởi tạo nhân tính toán của torch, không liên quan kích thước ảnh.
+
+`import torch` giờ chạy trên luồng nền **ngay từ dòng đầu của `main.py`**, song song với
+việc dựng giao diện thay vì nối đuôi. Đo được: **5,7 → 5,1 giây** từ lúc mở app đến lúc
+bắt đầu nhìn thấy.
+
+Khoảng 5 giây là sàn thực tế của một ứng dụng YOLO trên PyTorch.
+
+> **Trên máy có GPU sẽ CHẬM HƠN, không nhanh hơn.** Khởi tạo CUDA context tốn thêm vài
+> giây khi nạp. Đổi lại mỗi khung hình suy diễn nhanh hơn nhiều khi đã chạy.

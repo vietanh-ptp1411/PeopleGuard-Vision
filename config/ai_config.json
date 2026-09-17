@@ -1,10 +1,11 @@
 {
   "detector": {
     "model_path": "models/yolo11n.pt",
-    "confidence": 0.4,
+    "confidence": 0.2,
     "iou": 0.5,
-    "device": "auto",
+    "device": "cuda",
     "imgsz": 640,
+    "max_fps": 12.0,
     "classes": [
       0
     ],
@@ -18,7 +19,7 @@
   "logic": {
     "containment_mode": "foot_point",
     "intersection_threshold": 0.3,
-    "on_delay_ms": 200,
+    "on_delay_ms": 20,
     "off_delay_ms": 1000,
     "min_detection_frames": 3
   }
