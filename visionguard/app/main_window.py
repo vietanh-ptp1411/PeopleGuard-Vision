@@ -36,8 +36,7 @@ from .controllers.system_controller import SystemController
 from .theme import COLOR_TEXT_MUTED, status_caption, status_color
 from .widgets.ai_config_widget import AIConfigWidget
 from .widgets.camera_config_widget import CameraConfigWidget
-from .widgets.chrome import (AlertStrip, AppBar, AreaBanner, ElidedLabel, StateChip, caption,
-                            separator)
+from .widgets.chrome import AlertStrip, AppBar, ElidedLabel, StateChip, caption, separator
 from .widgets.event_monitor_widget import EventMonitorWidget
 from .widgets.events_widget import EventsWidget
 from .widgets.log_widget import LogWidget
@@ -48,10 +47,6 @@ from .widgets.video_grid import VideoGrid
 from .widgets.video_view import PLACEHOLDER_AI_CAMERA, PLACEHOLDER_YOLO
 
 log = logging.getLogger("UI")
-
-SAFETY_NOTE_SHORT = "Thiết bị giám sát - KHÔNG phải thiết bị an toàn đạt chuẩn"
-SAFETY_NOTE = ("Monitoring system only - NOT a safety-rated protective device. "
-               "Use certified safety PLC / sensors for personnel protection.")
 
 TAB_STATUS, TAB_CAMERA, TAB_EVENT, TAB_AI, TAB_ROI, TAB_PLC, TAB_HISTORY = range(7)
 
@@ -155,11 +150,6 @@ class MainWindow(QMainWindow):
 
         lay.addWidget(separator(length=38))
 
-        self.banner = AreaBanner()
-        lay.addWidget(self.banner)
-
-        lay.addWidget(separator(length=38))
-
         self.chip_camera = StateChip("CAMERA")
         self.chip_detect = StateChip("AI EVENTS")
         self.chip_zones = StateChip("REGIONS")
@@ -229,10 +219,6 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(central)
 
         # ---------------- status bar
-        self.lbl_safety = QLabel("⚠  " + SAFETY_NOTE_SHORT)
-        self.lbl_safety.setStyleSheet(f"color: {COLOR_TEXT_MUTED}; font-size: 9pt;")
-        self.lbl_safety.setToolTip(SAFETY_NOTE)
-        self.statusBar().addPermanentWidget(self.lbl_safety)
         self.statusBar().showMessage("Sẵn sàng")
 
     def _build_live_card(self) -> QWidget:
@@ -466,7 +452,7 @@ class MainWindow(QMainWindow):
     def _apply_area(self, status: str) -> None:
         caption_text = status_caption(status)
         self.video.set_area_status(caption_text if status != "STOPPED" else "", status_color(status))
-        self.banner.set_status(status, caption_text)
+        self.status_panel.set_area_status(status, caption_text)
 
     def _on_system_state(self, state: str, msg: str) -> None:
         self._system_state = state
@@ -527,7 +513,6 @@ class MainWindow(QMainWindow):
         if not running:
             self.video.clear_result()
             self.status_panel.set_ai_perf(0.0, 0.0)
-            self.status_panel.set_counts(0, 0, 0, 0, "")
         self._refresh_status()
 
     def _on_plc_state(self, connected: bool, msg: str) -> None:
@@ -542,8 +527,6 @@ class MainWindow(QMainWindow):
 
     def _on_result(self, result) -> None:
         self.video.set_result(result)
-        ev = result.evaluation
-        self.status_panel.set_counts(ev.total, ev.in_roi, ev.outside, ev.ignored, ", ".join(ev.occupied_roi_ids()))
         self.status_panel.set_ai_perf(result.ai_fps, result.inference_ms)
         if result.roi_states != self._roi_states:
             self._roi_states = dict(result.roi_states)
@@ -584,7 +567,6 @@ class MainWindow(QMainWindow):
         self.tabs.setTabVisible(TAB_EVENT, ai)
         self.tabs.setTabVisible(TAB_AI, not ai)
         self.tabs.setTabVisible(TAB_ROI, not ai)
-        self.status_panel.set_count_labels(ai)
         self.chip_detect.set_caption("AI EVENTS" if ai else "AI MODEL")
         self.chip_zones.set_caption("REGIONS" if ai else "ZONES")
         provider = self.ctrl.settings.camera.ai_camera.provider_enum
@@ -640,10 +622,6 @@ class MainWindow(QMainWindow):
 
     def _on_zone_states(self, states) -> None:
         self.event_monitor.update_zone_states(states)
-        occupied = [rid for rid, st in states.items() if getattr(st, "occupied", False)]
-        counts = self.ctrl.event_state
-        self.status_panel.set_counts(counts.total_person_count(), len(occupied), 0,
-                                     counts.ignored_non_human, ", ".join(occupied))
 
     def _on_regions_changed(self) -> None:
         self.event_monitor.set_regions(self.ctrl.region_mapping.all(), self.ctrl.zone_states())
