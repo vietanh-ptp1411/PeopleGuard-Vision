@@ -247,3 +247,37 @@ Hàm che URL cắt ở dấu `@` **đầu tiên**. Hikvision bắt buộc mật 
 cùng của phần authority, đúng như RFC 3986, và cả dự án dùng chung một hàm duy nhất.
 
 Và như mọi khi: đây là thiết bị giám sát, không phải thiết bị an toàn đạt chuẩn.
+
+## Hàng đợi ảnh phình vô hạn — lỗi nặng nhất, đã sửa
+
+`CameraWorker` phát tín hiệu ảnh sang luồng giao diện cho **mỗi frame bắt được**. Đó là
+kết nối *queued*, và kết nối queued **không có cơ chế chặn ngược**: giao diện chậm hơn
+camera thì sự kiện chất đống trong hàng đợi, mỗi sự kiện ôm một ảnh đầy đủ. Không ai xoá
+chúng — chúng chỉ chờ.
+
+Đo với 3 camera đọc hết tốc lực:
+
+| | Trước | Sau |
+|---|---|---|
+| Ảnh đẩy sang giao diện | 652/giây | 64/giây |
+| Bộ nhớ sau 49 giây | **9.955 MB, vẫn tăng** | ~710 MB |
+| Độ dốc sau khi ổn định (150 giây) | — | **−12 MB/phút** (nhiễu) |
+
+Đây không chỉ là chuyện của bài kiểm thử. Ba camera RTSP thật ở 25 fps đẩy khoảng
+**67 MB/giây** vào hàng đợi đó. Nó chỉ rỗng chừng nào giao diện còn theo kịp — một lần vẽ
+lại chậm, một hộp thoại đang mở, một chương trình khác chiếm CPU, là nó bắt đầu dâng.
+Khựng 30 giây là 2 GB. Với phần mềm chạy hàng tháng, đó là ngòi nổ chậm.
+
+Giờ camera chỉ đưa ảnh mới **sau khi giao diện đã nhận xong ảnh cũ**, và không nhanh hơn
+tốc độ vẽ của màn hình (`ui_fps_limit`). Hàng đợi bị chặn ở **1 ảnh mỗi camera**, bất kể
+giao diện chậm đến đâu.
+
+**Phát hiện người không bị ảnh hưởng.** Luồng suy diễn đọc từ `LatestFrameBuffer`, vốn chỉ
+giữ ảnh mới nhất — bỏ qua một ảnh xem trước không bao giờ làm mất một lần phát hiện.
+
+## Trạng thái kiểm thử
+
+14 kịch bản, chạy 2 lượt, **toàn bộ sạch**: `ui_acceptance`, `multicam_e2e`, `multicam_ui`,
+`multicam_ux`, `layout_stability`, `clip_recording`, `clip_ui`, `roi_persist`,
+`widget_interaction`, `ai_camera_e2e`, `ai_ui_test`, `header_shot`, `window_shot`,
+`deploy_check`.
