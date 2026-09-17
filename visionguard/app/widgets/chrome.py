@@ -62,6 +62,7 @@ class ElidedLabel(QLabel):
 # --------------------------------------------------------------------------- app bar
 BAR_HEIGHT = 64
 LOGO_HEIGHT = 28
+MARGIN = 16
 
 
 def _load_logo(height: int) -> QPixmap | None:
@@ -94,13 +95,63 @@ def _divider() -> QFrame:
     return line
 
 
-class ResourceMeter(QFrame):
-    """What VisionGuard is costing this machine: CPU and memory, as two small bars.
+class _Gauge(QFrame):
+    """One tile: caption and percentage on a line, a slim bar filling the width below.
 
-    These are the *process* figures, not the machine's. They are the numbers an operator
-    can act on, and the ones the 12 fps detector cap was tuned against - a busy machine
-    with an idle VisionGuard is somebody else's problem. The whole-machine load is in
-    the tooltip for when that question does come up.
+    A fixed width on purpose. Letting the tile size itself makes the whole right-hand
+    end of the bar shuffle sideways every time the reading crosses from 9% to 10%.
+    """
+
+    def __init__(self, caption: str, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setProperty("class", "gauge")
+        self.setFixedWidth(104)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(10, 5, 10, 7)
+        lay.setSpacing(4)
+
+        head = QHBoxLayout()
+        head.setContentsMargins(0, 0, 0, 0)
+        head.setSpacing(6)
+        label = QLabel(caption)
+        label.setProperty("class", "meterlabel")
+        self.value = QLabel("--")
+        self.value.setProperty("class", "metervalue")
+        self.value.setProperty("tone", "ok")
+        self.value.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        head.addWidget(label)
+        head.addStretch(1)
+        head.addWidget(self.value)
+        lay.addLayout(head)
+
+        self.bar = QProgressBar()
+        self.bar.setProperty("class", "meter")
+        self.bar.setProperty("tone", "ok")
+        self.bar.setRange(0, 100)
+        self.bar.setValue(0)
+        self.bar.setTextVisible(False)
+        self.bar.setFixedHeight(4)
+        lay.addWidget(self.bar)
+
+    def set(self, percent: float, text: str, tone: str) -> None:
+        self.bar.setValue(int(round(max(0.0, min(100.0, percent)))))
+        self.value.setText(text)
+        if self.value.property("tone") != tone:
+            # Repolish only when the colour actually changes - doing it every tick would
+            # make the style engine rebuild these widgets twice a second for nothing.
+            for widget in (self.value, self.bar):
+                widget.setProperty("tone", tone)
+                widget.style().unpolish(widget)
+                widget.style().polish(widget)
+
+
+class ResourceMeter(QFrame):
+    """Machine load, read the way Task Manager reads it: CPU % and memory % of the box.
+
+    Not this process's share. On a dedicated monitoring PC the question an operator is
+    actually asking is "is this machine coping", and something else eating the CPU
+    starves the detector just as effectively as VisionGuard doing it to itself. What
+    VisionGuard alone costs is in the tooltip.
     """
 
     WARN_AT = 60.0
@@ -109,71 +160,46 @@ class ResourceMeter(QFrame):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setProperty("class", "transparent")
-        grid = QGridLayout(self)
-        grid.setContentsMargins(0, 0, 0, 0)
-        grid.setHorizontalSpacing(8)
-        grid.setVerticalSpacing(4)
-        self.bar_cpu, self.val_cpu = self._row(grid, 0, "CPU")
-        self.bar_ram, self.val_ram = self._row(grid, 1, "RAM")
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(9)
+        self.cpu = _Gauge("CPU")
+        self.ram = _Gauge("RAM")
+        lay.addWidget(self.cpu)
+        lay.addWidget(self.ram)
 
         self._process = psutil.Process() if psutil is not None else None
-        self._cores = float(psutil.cpu_count() or 1) if psutil is not None else 1.0
-        if self._process is not None:
+        if psutil is not None:
             # cpu_percent reports usage *since the previous call*, so the first one only
-            # starts the clock. Without this the bar's first reading is a meaningless 0.
+            # starts the clock. Without this the first reading is a meaningless 0.
+            psutil.cpu_percent(None)
             self._process.cpu_percent(None)
+            self._cores = float(psutil.cpu_count() or 1)
         else:
-            for label in (self.val_cpu, self.val_ram):
-                label.setText("n/a")
+            self._cores = 1.0
+            for gauge in (self.cpu, self.ram):
+                gauge.value.setText("n/a")
             self.setToolTip("psutil chưa được cài - không đo được CPU/RAM")
 
-    def _row(self, grid: QGridLayout, row: int, caption: str) -> tuple[QProgressBar, QLabel]:
-        label = QLabel(caption)
-        label.setProperty("class", "meterlabel")
-        bar = QProgressBar()
-        bar.setProperty("class", "meter")
-        bar.setProperty("tone", "ok")
-        bar.setRange(0, 100)
-        bar.setValue(0)
-        bar.setTextVisible(False)
-        bar.setFixedSize(72, 7)
-        value = QLabel("-")
-        value.setProperty("class", "metervalue")
-        value.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        value.setFixedWidth(52)
-        middle = Qt.AlignmentFlag.AlignVCenter
-        grid.addWidget(label, row, 0, middle)
-        grid.addWidget(bar, row, 1, middle)
-        grid.addWidget(value, row, 2, middle)
-        return bar, value
+    def _tone(self, percent: float) -> str:
+        return "ok" if percent < self.WARN_AT else ("warn" if percent < self.HIGH_AT else "high")
 
     def refresh(self) -> None:
-        if self._process is None:
+        if psutil is None:
             return
         try:
-            cpu = self._process.cpu_percent(None) / self._cores
-            rss_gb = self._process.memory_info().rss / 1e9
+            cpu = psutil.cpu_percent(None)
             memory = psutil.virtual_memory()
+            own_cpu = self._process.cpu_percent(None) / self._cores
+            own_gb = self._process.memory_info().rss / 1e9
         except Exception:
             return                      # a sampling hiccup must never take the UI with it
-        total_gb = memory.total / 1e9
-        self._apply(self.bar_cpu, self.val_cpu, cpu, f"{cpu:.0f}%")
-        self._apply(self.bar_ram, self.val_ram, rss_gb / total_gb * 100.0 if total_gb else 0.0,
-                    f"{rss_gb:.1f} GB")
-        self.setToolTip(f"VisionGuard: {cpu:.0f}% CPU, {rss_gb:.2f} GB\n"
-                        f"Toàn máy: {psutil.cpu_percent(None):.0f}% CPU, "
-                        f"{memory.percent:.0f}% RAM ({total_gb:.1f} GB tổng)")
-
-    def _apply(self, bar: QProgressBar, label: QLabel, percent: float, text: str) -> None:
-        bar.setValue(int(round(max(0.0, min(100.0, percent)))))
-        label.setText(text)
-        tone = "ok" if percent < self.WARN_AT else ("warn" if percent < self.HIGH_AT else "high")
-        if bar.property("tone") != tone:
-            # Repolish only when the colour actually changes - doing it every tick would
-            # make the style engine rebuild these widgets twice a second for nothing.
-            bar.setProperty("tone", tone)
-            bar.style().unpolish(bar)
-            bar.style().polish(bar)
+        self.cpu.set(cpu, f"{cpu:.0f}%", self._tone(cpu))
+        self.ram.set(memory.percent, f"{memory.percent:.0f}%", self._tone(memory.percent))
+        self.setToolTip(
+            f"Toàn máy: {cpu:.0f}% CPU  ·  RAM {memory.used / 1e9:.1f} / "
+            f"{memory.total / 1e9:.1f} GB ({memory.percent:.0f}%)\n"
+            f"Riêng VisionGuard: {own_cpu:.0f}% CPU  ·  {own_gb:.2f} GB")
 
 
 class AppBar(QFrame):
@@ -194,7 +220,8 @@ class AppBar(QFrame):
         self.setObjectName("AppBar")
         self.setFixedHeight(BAR_HEIGHT)
         grid = QGridLayout(self)
-        grid.setContentsMargins(14, 0, 18, 0)
+        # Equal margins, so "centred" means centred on the bar and not 2px off it.
+        grid.setContentsMargins(MARGIN, 0, MARGIN, 0)
         grid.setSpacing(0)
 
         middle = Qt.AlignmentFlag.AlignVCenter
@@ -206,11 +233,16 @@ class AppBar(QFrame):
         grid.addWidget(self._right, 0, 0, Qt.AlignmentFlag.AlignRight | middle)
 
     def minimumSizeHint(self):  # noqa: N802 (Qt API)
-        """Stacked in one cell, the grid would happily let the three groups overlap."""
-        gap = 24
-        width = (self._left.sizeHint().width() + self._title.sizeHint().width()
-                 + self._right.sizeHint().width() + 14 + 18 + 2 * gap)
-        return QSize(width, BAR_HEIGHT)
+        """Stacked in one cell, the grid would happily let the three groups overlap.
+
+        Summing the three widths is the obvious formula and it is wrong: a centred item
+        is mirrored about the middle, so it collides with whichever side reaches further
+        in, and the room it needs is twice *that* side, not left plus right. The sum said
+        737px while the title was still running into the CPU tile at 770.
+        """
+        gap = 20
+        side = MARGIN + max(self._left.sizeHint().width(), self._right.sizeHint().width())
+        return QSize(2 * side + self._title.sizeHint().width() + 2 * gap, BAR_HEIGHT)
 
     def _title_block(self) -> QWidget:
         block = QWidget()
