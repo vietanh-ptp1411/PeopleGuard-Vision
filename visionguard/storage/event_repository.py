@@ -108,6 +108,31 @@ class EventRepository:
         except sqlite3.Error:
             return 0
 
+    def prune(self, keep_days: int, max_rows: int = 0) -> int:
+        """Drop rows older than keep_days, then anything past max_rows. Returns rows gone."""
+        if not self.available:
+            return 0
+        removed = 0
+        with self._lock:
+            try:
+                if keep_days and keep_days > 0:
+                    cur = self._conn.execute(
+                        "DELETE FROM events WHERE timestamp < datetime('now', 'localtime', ?)",
+                        (f"-{int(keep_days)} days",))
+                    removed += cur.rowcount or 0
+                if max_rows and max_rows > 0:
+                    cur = self._conn.execute(
+                        "DELETE FROM events WHERE id NOT IN "
+                        "(SELECT id FROM events ORDER BY id DESC LIMIT ?)", (int(max_rows),))
+                    removed += cur.rowcount or 0
+                self._conn.commit()
+                if removed:
+                    self._conn.execute("VACUUM")     # give the space back to the disk
+            except Exception as exc:
+                log.error("Cannot prune the event history: %s", exc)
+                return 0
+        return removed
+
     def clear(self) -> None:
         if self._conn is None:
             return

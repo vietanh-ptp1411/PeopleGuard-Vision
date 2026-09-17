@@ -34,6 +34,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="VisionGuard")
     parser.add_argument("--log-level", default=None, help="DEBUG / INFO / WARNING")
     parser.add_argument("--config-dir", default="config")
+    parser.add_argument("--autostart", action="store_true",
+                        help="begin monitoring as soon as the window is up (unattended sites)")
     args = parser.parse_args()
 
     from visionguard.config.config_manager import ConfigManager
@@ -63,6 +65,12 @@ def main() -> int:
 
     window = MainWindow(cm)
     window.showMaximized()   # industrial HMI: always start on the full screen (F11 = borderless)
+    if args.autostart:
+        # Unattended site: nobody is there to press START after a power cut. Give the
+        # workers a moment to come up first, then start monitoring.
+        from PySide6.QtCore import QTimer
+        log.info("Auto-start requested: monitoring will begin shortly")
+        QTimer.singleShot(3000, window.ctrl.start_system)
     code = app.exec()
     log.info("VisionGuard exited (%d)", code)
     return code

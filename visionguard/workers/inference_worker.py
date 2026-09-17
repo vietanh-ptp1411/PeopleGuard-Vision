@@ -34,6 +34,8 @@ class InferenceWorker(QThread):
         # another ~1 GB of VRAM to do the same work a few milliseconds later.
         self._sources: list = [(buffer, pipeline)]
         self._next = 0
+        self._due: list = [0.0]
+        self._max_fps = 0.0
         self._commands: "queue.Queue[Tuple[str, Any]]" = queue.Queue()
         self._running = True
         self._detecting = False
@@ -149,22 +151,43 @@ class InferenceWorker(QThread):
         """[(buffer, pipeline), ...] - one entry per camera being watched."""
         self._sources = list(sources) or [(self._buffer, self._pipeline)]
         self._next = 0
+        self._due = [0.0] * len(self._sources)
+
+    def set_max_fps(self, fps: float) -> None:
+        """Inferences per second per camera. 0 lets it run flat out."""
+        self._max_fps = max(0.0, float(fps or 0.0))
 
     def _step(self) -> None:
-        # Round robin so a busy camera cannot starve the others. Each camera is given one
-        # short read; nothing waiting means move straight on to the next.
+        # Round robin so a busy camera cannot starve the others, and each camera has its
+        # own next-allowed time so the rate limit is per camera, not shared.
         count = len(self._sources)
+        if len(self._due) != count:
+            self._due = [0.0] * count
+        interval = 1.0 / self._max_fps if self._max_fps > 0 else 0.0
+        now = time.monotonic()
         timeout = 0.2 if count == 1 else 0.05
         frame = None
         pipeline = self._pipeline
+        picked = -1
         for _ in range(count):
-            buffer, pipeline = self._sources[self._next]
+            index = self._next
             self._next = (self._next + 1) % count
+            if interval and now < self._due[index]:
+                continue                    # this camera has had its turn recently
+            buffer, pipeline = self._sources[index]
             frame = buffer.get(timeout=timeout)
             if frame is not None:
+                picked = index
                 break
         if frame is None:
+            if interval:
+                # every camera is paced out: wait for the nearest one instead of spinning
+                wait = min(self._due) - time.monotonic()
+                if wait > 0:
+                    time.sleep(min(wait, 0.1))
             return
+        if interval:
+            self._due[picked] = max(now, self._due[picked]) + interval
         t0 = time.perf_counter()
         try:
             detections = self._detector.detect(frame.image)
