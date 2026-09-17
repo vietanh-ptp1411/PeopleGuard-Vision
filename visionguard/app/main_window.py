@@ -20,8 +20,10 @@ import logging
 from datetime import datetime
 from typing import Dict
 
-from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QAction, QCloseEvent, QKeySequence
+from pathlib import Path
+
+from PySide6.QtCore import Qt, QTimer, QUrl
+from PySide6.QtGui import QAction, QCloseEvent, QDesktopServices, QKeySequence
 from PySide6.QtWidgets import (QFrame, QHBoxLayout, QLabel, QMainWindow, QMessageBox, QPushButton, QSplitter,
                                QTabWidget, QVBoxLayout, QWidget)
 
@@ -103,6 +105,7 @@ class MainWindow(QMainWindow):
         self.video.set_rois(self.ctrl.roi_manager.all())
         self.roi_panel.set_rois(self.ctrl.roi_manager.all())
         self.events_widget.set_events(self.ctrl.events.recent(300), self.ctrl.events.count())
+        self.events_widget.set_clip_config(s.app.clip)
         self.log_widget.set_log_file(f"logs/{datetime.now():%Y-%m-%d}.log")
         self._apply_area("STOPPED")
         self.status_panel.set_heartbeat(None, s.plc.heartbeat.enabled)
@@ -395,6 +398,8 @@ class MainWindow(QMainWindow):
         self.events_widget.export_requested.connect(
             lambda p: self._show_message(("Exported " + p) if c.events.export_csv(p) else "Export failed"))
         self.events_widget.clear_requested.connect(self._clear_events)
+        self.events_widget.clip_config_changed.connect(c.apply_clip_config)
+        self.events_widget.open_clips_requested.connect(self._open_clips_folder)
 
         # ROI panel + video editor
         rp, v = self.roi_panel, self.video
@@ -744,6 +749,11 @@ class MainWindow(QMainWindow):
         self.ctrl.save_rois()
         self.roi_panel.set_dirty(self.ctrl.roi_manager.dirty)
         self._refresh_status()
+
+    def _open_clips_folder(self) -> None:
+        folder = Path(self.ctrl.clip_directory())
+        folder.mkdir(parents=True, exist_ok=True)
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder.resolve())))
 
     def _clear_events(self) -> None:
         if QMessageBox.question(self, "Xoá lịch sử",
