@@ -482,24 +482,16 @@ class MainWindow(QMainWindow):
     # ================================================================== status slots
     def _apply_area(self, status: str) -> None:
         caption_text = status_caption(status)
-        self.status_panel.set_area_status(status, caption_text)
         self.video.set_area_status(caption_text if status != "STOPPED" else "", status_color(status))
         self.banner.set_status(status, caption_text)
 
     def _on_system_state(self, state: str, msg: str) -> None:
         self._system_state = state
         self._system_message = msg
-        self.status_panel.set_system(state, msg)
         running = self.ctrl.running
         self.btn_start.setEnabled(not running)
         self.btn_stop.setEnabled(running)
         self.video.set_overlay_info(msg or "")
-        if msg:
-            self.status_panel.set_detail(msg)
-        elif state == "RUNNING":
-            self.status_panel.set_detail("Đang giám sát")
-        elif state == "STOPPED":
-            self.status_panel.set_detail("Hệ thống đã dừng - nhấn START để bắt đầu")
         self._refresh_status()
 
     def _on_camera_state(self, state: str, msg: str) -> None:
@@ -507,10 +499,6 @@ class MainWindow(QMainWindow):
             self.camera_cfg.set_status(msg, ok=(state == "TEST_OK"))
             return
         self._camera_state = state
-        led = {CameraState.STREAMING: "ok", CameraState.CONNECTED: "busy", CameraState.CONNECTING: "busy",
-               CameraState.RECONNECTING: "warn", CameraState.FINISHED: "warn"}.get(
-            state, "error" if state in (CameraState.LOST, CameraState.ERROR) else "off")
-        self.status_panel.set_camera(state, led)
         self.camera_cfg.set_camera_state(state)
         self._update_camera_buttons(state)
         ok = None if state in (CameraState.DISCONNECTED, CameraState.CONNECTING) else state in (
@@ -544,16 +532,11 @@ class MainWindow(QMainWindow):
         self._model_loaded = loaded
         self._model_error = msg if failed else ""
         self.ai_cfg.set_model_status(msg, loaded if (failed or loaded) else None)
-        if not self._detecting and not self._ai_camera_mode:
-            led = "busy" if loaded else ("error" if failed else "off")
-            self.status_panel.set_ai("MODEL LOADED" if loaded else ("LOAD FAILED" if failed else "STOPPED"), led)
         self._refresh_status()
 
     def _on_detection_state(self, running: bool, msg: str) -> None:
         self._detecting = running
         self.ai_cfg.set_detection_running(running)
-        led = "ok" if running else ("busy" if self._model_loaded else "off")
-        self.status_panel.set_ai("RUNNING" if running else ("MODEL LOADED" if self._model_loaded else "STOPPED"), led)
         self.video.set_display_mode("result" if running else "raw")
         if not running:
             self.video.clear_result()
@@ -564,9 +547,7 @@ class MainWindow(QMainWindow):
     def _on_plc_state(self, connected: bool, msg: str) -> None:
         self._plc_connected = connected
         sim = self.ctrl.settings.plc.simulation_mode
-        led = "ok" if (connected and not sim) else ("warn" if connected else "error")
         label = ("SIMULATION" if sim else "CONNECTED") if connected else "DISCONNECTED"
-        self.status_panel.set_plc(label, led)
         self.plc_cfg.set_connected(connected)
         self.plc_cfg.set_status(f"{label}: {msg}" if msg else label, connected)
         if not connected:
@@ -615,7 +596,6 @@ class MainWindow(QMainWindow):
         ai = mode == DetectionMode.AI_CAMERA
         self._ai_camera_mode = ai
         self.status_panel.set_ai_camera_mode(ai)
-        self.status_panel.set_detection_mode("CAMERA AI" if ai else "PC AI / YOLO")
         self.video.set_placeholder(PLACEHOLDER_AI_CAMERA if ai else PLACEHOLDER_YOLO)
         self.appbar.set_mode("AI CAMERA" if ai else "PC AI · YOLO")
         self._update_window_title()
@@ -675,9 +655,6 @@ class MainWindow(QMainWindow):
         self._event_channel = state
         self._event_message = message
         self.event_monitor.set_channel_state(state, message)
-        led = {"ONLINE": "ok", "CONNECTING": "busy", "RECONNECTING": "warn",
-               "ERROR": "error", "DISABLED": "off"}.get(state, "error" if state == "DISCONNECTED" else "off")
-        self.status_panel.set_event_channel(state, led)
         self._refresh_status()
 
     def _on_zone_states(self, states) -> None:
