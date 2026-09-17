@@ -733,10 +733,48 @@ class SystemController(QObject):
         for w in workers:
             w.stop_worker()
         for w in workers:
-            if not w.wait(3000):
-                log.warning("%s did not stop in time", type(w).__name__)
+            self._join(w)
         self.snapshots.shutdown()
         self.events.close()
+
+    #: A worker that outlives this call is not a warning, it is a crash: Qt calls qFatal
+    #: on a QThread destroyed while still running, and on Windows that is a fast-fail the
+    #: process cannot survive - exit code 0xC0000409, no traceback, nothing in the log.
+    JOIN_GRACE_MS = 3000
+    #: Closing the window while the model is still being read gave exactly that crash.
+    #: The load cannot be cut short, so the only correct move is to outwait it: about
+    #: twelve seconds for yolo11n on CPU, and more on a machine that is busy.
+    JOIN_LOADING_MS = 30000
+
+    def _join(self, worker) -> None:
+        """Wait for one worker, and be certain it is dead before returning."""
+        name = type(worker).__name__
+        started = time.monotonic()
+        if worker.wait(self.JOIN_GRACE_MS):
+            log.debug("%s stopped in %.0f ms", name, (time.monotonic() - started) * 1000)
+            return
+
+        if getattr(worker, "is_loading", lambda: False)():
+            log.info("%s is still loading the model - waiting for it to finish", name)
+            if worker.wait(self.JOIN_LOADING_MS):
+                log.info("%s stopped after the load finished (%.1f s)", name,
+                         time.monotonic() - started)
+                return
+
+        log.warning("%s still running after %.1f s - interrupting", name,
+                    time.monotonic() - started)
+        worker.requestInterruption()
+        if worker.wait(4000):
+            log.warning("%s stopped after being interrupted (%.1f s)", name,
+                        time.monotonic() - started)
+            return
+        # Everything that had to reach disk already has: the recorders are closed, the
+        # event database is about to be, and the config was saved before we got here.
+        # Killing the thread is ugly; letting it be destroyed while running is fatal.
+        log.error("%s will not stop after %.1f s - terminating it", name,
+                  time.monotonic() - started)
+        worker.terminate()
+        worker.wait()
 
     # ================================================================== worker callbacks
     def _on_frame(self, frame: Frame) -> None:

@@ -38,6 +38,7 @@ class InferenceWorker(QThread):
         self._max_fps = 0.0
         self._commands: "queue.Queue[Tuple[str, Any]]" = queue.Queue()
         self._running = True
+        self._loading = False
         self._detecting = False
         self._errors = 0
 
@@ -129,9 +130,20 @@ class InferenceWorker(QThread):
             log.exception("Inference command %s failed: %s", name, exc)
             self.inference_error.emit(str(exc))
 
+    def is_loading(self) -> bool:
+        """True while the model is being read off disk.
+
+        Loading yolo11n on CPU takes about twelve seconds and nothing can interrupt it -
+        not the stop flag, not requestInterruption, because the thread is deep inside
+        torch. Shutdown has to know, or it walks away from a thread that is still alive
+        and Qt kills the process when that thread is destroyed.
+        """
+        return self._loading
+
     def _load(self, config: DetectorConfig) -> None:
         was_detecting = self._detecting
         self._detecting = False
+        self._loading = True
         try:
             info = self._detector.load(config)
         except DetectorError as exc:
@@ -142,6 +154,8 @@ class InferenceWorker(QThread):
             log.exception("Model load crashed")
             self.model_load_failed.emit(f"Unexpected error: {exc}")
             return
+        finally:
+            self._loading = False
         self.model_loaded.emit(info)
         if was_detecting:
             self._detecting = True
@@ -170,6 +184,8 @@ class InferenceWorker(QThread):
         pipeline = self._pipeline
         picked = -1
         for _ in range(count):
+            if not self._running:
+                return                      # a stop arrived; do not finish the sweep
             index = self._next
             self._next = (self._next + 1) % count
             if interval and now < self._due[index]:
