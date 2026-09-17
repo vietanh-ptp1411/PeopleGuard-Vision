@@ -5,7 +5,8 @@ from typing import Dict, List
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor
-from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QFormLayout, QGridLayout, QGroupBox, QHBoxLayout,
+from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QFormLayout, QGridLayout, QGroupBox,
+                               QHBoxLayout,
                                QHeaderView, QLabel, QLineEdit, QPushButton, QScrollArea, QTableWidget,
                                QTableWidgetItem, QVBoxLayout, QWidget)
 
@@ -26,7 +27,7 @@ class RoiPanel(QWidget):
     clear_requested = Signal()
     save_requested = Signal()
     selection_changed = Signal(str)
-    fields_changed = Signal(str, str, str, bool)   # id, name, plc_device, enabled
+    fields_changed = Signal(str, str, str, bool, int)   # id, name, plc_device, enabled, camera
 
     COLS = ("ID", "Cam", "Name", "Type", "On", "PLC", "Pts", "State")
 
@@ -115,9 +116,12 @@ class RoiPanel(QWidget):
         self.edt_plc.setPlaceholderText("ví dụ M200 - không bắt buộc, chỉ cho vùng include")
         self.edt_plc.textChanged.connect(self._validate_plc)
         self.chk_enabled = QCheckBox("Enabled")
+        self.cmb_camera = QComboBox()
+        self.cmb_camera.setToolTip("Chuyển vùng này sang camera khác mà không phải vẽ lại")
         self.btn_apply = QPushButton("Apply to ROI")
         f.addRow("ID", self.lbl_id)
         f.addRow("Name", self.edt_name)
+        f.addRow("Camera", self.cmb_camera)
         f.addRow("PLC Device", self.edt_plc)
         f.addRow(self.chk_enabled)
         f.addRow(self.btn_apply)
@@ -186,6 +190,17 @@ class RoiPanel(QWidget):
         self.table.blockSignals(False)
         self._fill_fields()
 
+    def set_cameras(self, labels) -> None:
+        """The cameras a zone can be moved between."""
+        current = self.cmb_camera.currentIndex()
+        self.cmb_camera.blockSignals(True)
+        self.cmb_camera.clear()
+        for i, name in enumerate(labels):
+            self.cmb_camera.addItem(name, i)
+        self.cmb_camera.setCurrentIndex(min(max(0, current), self.cmb_camera.count() - 1))
+        self.cmb_camera.blockSignals(False)
+        self.cmb_camera.setEnabled(len(labels) > 1)
+
     def set_camera_context(self, label: str, several: bool) -> None:
         """Name the camera a new zone would be drawn on, when there is a choice."""
         self.lbl_target.setVisible(several)
@@ -234,7 +249,8 @@ class RoiPanel(QWidget):
     def _fill_fields(self) -> None:
         r = self._current()
         enabled = r is not None
-        for w in (self.edt_name, self.edt_plc, self.chk_enabled, self.btn_apply, self.btn_delete):
+        for w in (self.edt_name, self.edt_plc, self.chk_enabled, self.btn_apply, self.btn_delete,
+                  self.cmb_camera):
             w.setEnabled(enabled)
         if r is None:
             self.lbl_id.setText("-")
@@ -247,6 +263,11 @@ class RoiPanel(QWidget):
         self.edt_plc.setText(r.plc_device)
         self.edt_plc.setEnabled(r.is_include)
         self.chk_enabled.setChecked(r.enabled)
+        cam = int(getattr(r, "camera", 0))
+        if 0 <= cam < self.cmb_camera.count():
+            self.cmb_camera.blockSignals(True)
+            self.cmb_camera.setCurrentIndex(cam)
+            self.cmb_camera.blockSignals(False)
 
     def _validate_plc(self) -> None:
         txt = self.edt_plc.text().strip()
@@ -262,4 +283,6 @@ class RoiPanel(QWidget):
             self.lbl_hint.setText(f"Địa chỉ PLC '{plc}' không hợp lệ (ví dụ: M200, D110)")
             self.lbl_hint.setStyleSheet(f"color: {COLOR_ERROR}; font-size: 9pt;")
             return
-        self.fields_changed.emit(r.id, self.edt_name.text().strip() or r.name, plc if r.is_include else "", self.chk_enabled.isChecked())
+        self.fields_changed.emit(r.id, self.edt_name.text().strip() or r.name,
+                                 plc if r.is_include else "", self.chk_enabled.isChecked(),
+                                 max(0, self.cmb_camera.currentIndex()))

@@ -548,11 +548,13 @@ class SystemController(QObject):
     def update_roi_points(self, roi_id: str, points: List) -> None:
         self.roi_manager.update_points(roi_id, points)
 
-    def update_roi_fields(self, roi_id: str, name: str, plc_device: str, enabled: bool) -> None:
+    def update_roi_fields(self, roi_id: str, name: str, plc_device: str, enabled: bool,
+                          camera: int = 0) -> None:
         roi = self.roi_manager.get(roi_id)
         if roi is None:
             return
         roi.name, roi.plc_device, roi.enabled = name, plc_device.upper(), enabled
+        roi.camera = max(0, int(camera))
         self.roi_manager.update(roi)
         self.message.emit(f"ROI {roi_id} updated")
 

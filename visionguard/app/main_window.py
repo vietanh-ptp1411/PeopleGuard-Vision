@@ -604,6 +604,7 @@ class MainWindow(QMainWindow):
     def _on_active_camera(self, index: int) -> None:
         """Which camera a new zone would be drawn on."""
         cfg_now = self.ctrl.settings.camera
+        self.roi_panel.set_cameras([cfg_now.label(i) for i in range(cfg_now.camera_count)])
         self.roi_panel.set_camera_context(cfg_now.label(index), self.video.count > 1)
         if self.video.count <= 1:
             self.lbl_source.setText(self.ctrl.settings.camera.describe_source())
