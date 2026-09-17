@@ -169,7 +169,11 @@ Chạy liên tục 4 camera với YOLO, lấy mẫu mỗi 15 giây:
 | Handle | 760 → 753 | Giảm |
 | Đối tượng Python | 351.874 → 351.899 | Phẳng |
 
-Không có rò rỉ bộ nhớ. Vấn đề thật nằm ở **CPU** và ở **đĩa**.
+Ở kịch bản này không có rò rỉ, và vấn đề nằm ở **CPU** và ở **đĩa**.
+
+> **Phép đo này chưa đủ.** Nó chỉ đúng chừng nào giao diện còn theo kịp camera. Khi giao
+> diện chậm lại thì có rò rỉ thật, và rất nặng — xem mục *Hàng đợi ảnh phình vô hạn* ở
+> cuối tài liệu. Bài đo trên không bắt được vì nó chưa bao giờ làm giao diện quá tải.
 
 ## Giới hạn tốc độ nhận dạng
 
