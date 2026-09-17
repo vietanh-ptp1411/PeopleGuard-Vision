@@ -1,18 +1,17 @@
-"""Overview tab: system state, connections, live counters and performance.
+"""Overview tab: the numbers, and nothing the command bar already shows.
 
-The big AREA CLEAR / PERSON DETECTED banner lives on the command bar, where it is visible
-from every tab - repeating it here would just push the numbers below the fold. What this
-panel adds is the detail behind that one word: which link is up, what the camera last
-sent, and how fast the chain is running.
+The area banner and the four state chips live on the command bar, visible from every tab.
+Repeating them here cost a third of the panel and told the operator nothing new, so this
+page is now only what the chips cannot fit: how many people, in which zones, what the
+camera last said, and how fast the chain is running.
 """
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QFrame, QGridLayout, QGroupBox, QLabel, QScrollArea, QVBoxLayout, QWidget
 
-from ..theme import (COLOR_BORDER, COLOR_ERROR, COLOR_TEXT, COLOR_TEXT_DIM, COLOR_TEXT_MUTED, state_colors,
-                     status_caption)
-from .led_indicator import LedIndicator, StatusRow
+from ..theme import COLOR_BORDER, COLOR_ERROR, COLOR_TEXT, COLOR_TEXT_MUTED
+from .led_indicator import StatusRow
 
 
 class MetricTile(QFrame):
@@ -21,13 +20,13 @@ class MetricTile(QFrame):
     def __init__(self, caption: str, value: str = "0", parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setProperty("class", "card")
-        self.setMinimumHeight(60)
+        self.setMinimumHeight(64)
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(8, 7, 8, 7)
+        lay.setContentsMargins(8, 8, 8, 8)
         lay.setSpacing(1)
         self.value = QLabel(value)
         self.value.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.value.setStyleSheet(f"color: {COLOR_TEXT}; font-size: 19pt; font-weight: 800;")
+        self.value.setStyleSheet(f"color: {COLOR_TEXT}; font-size: 21pt; font-weight: 800;")
         self.caption = QLabel(caption)
         self.caption.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.caption.setWordWrap(True)
@@ -38,11 +37,11 @@ class MetricTile(QFrame):
 
     def set_value(self, text: str, color: str | None = None) -> None:
         self.value.setText(text)
-        self.value.setStyleSheet(f"color: {color or COLOR_TEXT}; font-size: 19pt; font-weight: 800;")
+        self.value.setStyleSheet(f"color: {color or COLOR_TEXT}; font-size: 21pt; font-weight: 800;")
 
 
 class MiniStat(QWidget):
-    """label above, value below - four of these fit on one row."""
+    """label above, value below - three of these fit on one row."""
 
     def __init__(self, label: str, value: str = "-", parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -75,49 +74,6 @@ class StatusPanel(QWidget):
         lay.setContentsMargins(4, 8, 4, 6)
         lay.setSpacing(9)
 
-        # ---------------------------------------------------------- headline state
-        head = QFrame()
-        head.setProperty("class", "card")
-        hl = QVBoxLayout(head)
-        hl.setContentsMargins(14, 10, 14, 10)
-        hl.setSpacing(3)
-        line = QGridLayout()
-        line.setContentsMargins(0, 0, 0, 0)
-        line.setHorizontalSpacing(9)
-        self.state_led = LedIndicator(diameter=13)
-        self.state_label = QLabel("STOPPED")
-        self.state_label.setStyleSheet(f"color: {COLOR_TEXT}; font-size: 14pt; font-weight: 800;"
-                                       f" letter-spacing: 0.6px;")
-        self.area_value = QLabel("")
-        self.area_value.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        line.addWidget(self.state_led, 0, 0)
-        line.addWidget(self.state_label, 0, 1)
-        line.setColumnStretch(2, 1)
-        line.addWidget(self.area_value, 0, 3)
-        hl.addLayout(line)
-        self.detail_label = QLabel("Hệ thống đã dừng")
-        self.detail_label.setWordWrap(True)
-        self.detail_label.setStyleSheet(f"color: {COLOR_TEXT_DIM}; font-size: 9.5pt;")
-        hl.addWidget(self.detail_label)
-        lay.addWidget(head)
-
-        # ---------------------------------------------------------- connections
-        g1 = QGroupBox("CONNECTIONS")
-        l1 = QVBoxLayout(g1)
-        l1.setSpacing(1)
-        self.system_row = StatusRow("System", "STOPPED")
-        self.mode_row = StatusRow("Detection source", "-")
-        self.mode_row.led.hide()
-        self.camera_row = StatusRow("Video stream", "DISCONNECTED")
-        self.event_row = StatusRow("AI event channel", "-")
-        self.ai_row = StatusRow("AI Detection", "STOPPED")
-        self.plc_row = StatusRow("PLC", "DISCONNECTED")
-        self.heartbeat_row = StatusRow("Heartbeat", "-")
-        for r in (self.system_row, self.mode_row, self.camera_row, self.event_row, self.ai_row,
-                  self.plc_row, self.heartbeat_row):
-            l1.addWidget(r)
-        lay.addWidget(g1)
-
         # ---------------------------------------------------------- detection tiles
         g2 = QGroupBox("DETECTION")
         l2 = QGridLayout(g2)
@@ -135,7 +91,6 @@ class StatusPanel(QWidget):
         l2.addWidget(self.rois_row, 2, 0, 1, 2)
 
         sep = QFrame()
-        sep.setProperty("class", "hline")
         sep.setFixedHeight(1)
         sep.setStyleSheet(f"background: {COLOR_BORDER}; border: none;")
         l2.addWidget(sep, 3, 0, 1, 2)
@@ -160,11 +115,14 @@ class StatusPanel(QWidget):
         self.stat_infer = MiniStat("Inference", "0 ms")
         self.stat_plc = MiniStat("PLC latency", "0 ms")
         self.stat_dropped = MiniStat("Frames dropped", "0")
+        # the one diagnostic the command bar chips do not carry
+        self.stat_heartbeat = MiniStat("Heartbeat", "-")
         l3.addWidget(self.stat_fps_cam, 0, 0)
         l3.addWidget(self.stat_fps_ai, 0, 1)
         l3.addWidget(self.stat_infer, 0, 2)
         l3.addWidget(self.stat_plc, 1, 0)
         l3.addWidget(self.stat_dropped, 1, 1)
+        l3.addWidget(self.stat_heartbeat, 1, 2)
         lay.addWidget(g3)
 
         self.info_label = QLabel("")
@@ -174,42 +132,6 @@ class StatusPanel(QWidget):
         lay.addStretch(1)
 
     # ------------------------------------------------------------------ setters
-    def set_area_status(self, status: str, text: str | None = None) -> None:
-        """The banner itself is on the command bar; here it is one coloured line."""
-        if status in ("STOPPED", "STARTING"):     # the same word is already on the left
-            self.area_value.setText("")
-            return
-        led = {"CLEAR": "ok", "OCCUPIED": "error", "FAULT": "warn"}.get(status, "off")
-        color, _fill = state_colors(led)
-        self.area_value.setText(text or status_caption(status))
-        self.area_value.setStyleSheet(f"color: {color}; font-size: 10pt; font-weight: 700;")
-
-    def set_system(self, state: str, message: str = "") -> None:
-        led = {"RUNNING": "ok", "FAULT": "error", "STOPPED": "off", "STARTING": "busy"}.get(state, "off")
-        self.system_row.set(state, led)
-        self.state_led.set_state(led)
-        color, _fill = state_colors(led)
-        self.state_label.setText(state)
-        self.state_label.setStyleSheet(f"color: {color if led != 'off' else COLOR_TEXT}; font-size: 14pt;"
-                                       f" font-weight: 800; letter-spacing: 0.6px;")
-        if message:
-            self.detail_label.setText(message)
-
-    def set_detail(self, message: str) -> None:
-        self.detail_label.setText(message)
-
-    def set_camera(self, text: str, led: str) -> None:
-        self.camera_row.set(text, led)
-
-    def set_ai(self, text: str, led: str) -> None:
-        self.ai_row.set(text, led)
-
-    def set_event_channel(self, text: str, led: str) -> None:
-        self.event_row.set(text, led)
-
-    def set_detection_mode(self, text: str) -> None:
-        self.mode_row.set_value(text)
-
     def set_count_labels(self, ai_camera: bool) -> None:
         """The two big numbers mean different things in each detection mode."""
         if ai_camera:
@@ -222,12 +144,10 @@ class StatusPanel(QWidget):
             self.tile_ignored.caption.setText("IGNORED\n(EXCLUSION)")
 
     def set_ai_camera_mode(self, ai_camera: bool) -> None:
-        """Show only the rows that mean something in the active mode."""
-        self.event_row.setVisible(ai_camera)
+        """Show only what means something in the active mode."""
         self.last_event_caption.setVisible(ai_camera)
         self.last_event_label.setVisible(ai_camera)
         self.last_event_time.setVisible(ai_camera)
-        self.ai_row.setVisible(not ai_camera)
         self.tile_outside.setVisible(not ai_camera)
         self.tile_ignored.setVisible(not ai_camera)
         self.stat_fps_ai.setVisible(not ai_camera)
@@ -237,16 +157,13 @@ class StatusPanel(QWidget):
         self.last_event_label.setText(text or "-")
         self.last_event_time.setText(when)
 
-    def set_plc(self, text: str, led: str) -> None:
-        self.plc_row.set(text, led)
-
     def set_heartbeat(self, value: bool | None, enabled: bool = True) -> None:
         if not enabled:
-            self.heartbeat_row.set("DISABLED", "off")
+            self.stat_heartbeat.set_value("off")
         elif value is None:
-            self.heartbeat_row.set("-", "off")
+            self.stat_heartbeat.set_value("-")
         else:
-            self.heartbeat_row.set("1" if value else "0", "ok" if value else "busy")
+            self.stat_heartbeat.set_value("1" if value else "0")
 
     def set_counts(self, total: int, in_roi: int, outside: int, ignored: int, occupied_rois: str) -> None:
         self.tile_total.set_value(str(total))
