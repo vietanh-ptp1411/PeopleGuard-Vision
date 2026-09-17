@@ -689,6 +689,9 @@ class MainWindow(QMainWindow):
         self.chip_zones.set(*zones)
 
         sim = self.ctrl.settings.plc.simulation_mode
+        # Simulation is a mode the operator picked, not something to interrupt them about:
+        # the amber badge in the app bar already says the PLC output is virtual.
+        self._plc_expected = bool(self._plc_connected and sim)
         if self._plc_connected:
             plc = (("warn", "Mô phỏng (PLC ảo)") if sim
                    else ("ok", f"Đã kết nối {self.ctrl.settings.plc.connection.ip}"))
@@ -732,6 +735,8 @@ class MainWindow(QMainWindow):
              "Vùng camera" if self._ai_camera_mode else "Vùng giám sát"),
             (self.chip_plc, TAB_PLC, "PLC"),
         ]
+        if getattr(self, "_plc_expected", False):
+            candidates = [c for c in candidates if c[0] is not self.chip_plc]
         unhealthy = [(chip, tab, name, chip.led.state) for chip, tab, name in candidates
                      if chip.led.state == "error" or (chip.led.state == "warn" and running)]
         if not unhealthy:
