@@ -13,7 +13,7 @@ from __future__ import annotations
 import math
 from typing import List, Optional, Sequence
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QEvent, Qt, Signal
 from PySide6.QtWidgets import QGridLayout, QLabel, QVBoxLayout, QWidget
 
 from ...config.schemas import VisualizationConfig
@@ -38,6 +38,9 @@ class _Tile(QWidget):
         self.caption = QLabel(f"Camera {index + 1}")
         self.caption.setAlignment(Qt.AlignmentFlag.AlignCenter)
         lay.addWidget(self.caption)
+        # In grid view the picture is a button; maximised, it belongs to the ROI editor.
+        self.click_to_zoom = False
+        self.view.installEventFilter(self)
         self.set_active(False)
 
     def set_active(self, active: bool) -> None:
@@ -50,6 +53,13 @@ class _Tile(QWidget):
 
     def set_caption(self, text: str) -> None:
         self.caption.setText(text)
+
+    def eventFilter(self, obj, event) -> bool:  # noqa: N802
+        if (obj is self.view and self.click_to_zoom
+                and event.type() == QEvent.Type.MouseButtonPress):
+            self.clicked.emit(self.index)
+            return True        # swallowed: a grid click means 'show me this camera'
+        return False
 
     def mousePressEvent(self, event) -> None:  # noqa: N802
         self.clicked.emit(self.index)
@@ -66,6 +76,7 @@ class VideoGrid(QWidget):
     mode_changed = Signal(str)
     status_message = Signal(str)
     active_changed = Signal(int)
+    maximize_changed = Signal(int)          # camera index, or -1 back in the grid
 
     def __init__(self, vis: VisualizationConfig, fps_limit: int = 30,
                  parent: QWidget | None = None) -> None:
@@ -74,6 +85,7 @@ class VideoGrid(QWidget):
         self._fps_limit = fps_limit
         self._tiles: List[_Tile] = []
         self._active = 0
+        self._maximized = -1
         self._placeholder = ""
         self._grid = QGridLayout(self)
         self._grid.setContentsMargins(0, 0, 0, 0)
@@ -90,26 +102,43 @@ class VideoGrid(QWidget):
             tile.deleteLater()
         while len(self._tiles) < count:
             tile = _Tile(len(self._tiles), self._vis, self._fps_limit)
-            tile.clicked.connect(self.set_active)
+            tile.clicked.connect(self.set_maximized)
             self._connect(tile)
             self._tiles.append(tile)
 
-        columns = 1 if count == 1 else 2 if count <= 4 else 3
-        for i, tile in enumerate(self._tiles):
-            self._grid.addWidget(tile, i // columns, i % columns)
-        for c in range(max(1, columns)):
-            self._grid.setColumnStretch(c, 1)
-        for r in range(int(math.ceil(count / columns))):
-            self._grid.setRowStretch(r, 1)
-
-        self._tiles[0].caption.setVisible(count > 1)
-        for tile in self._tiles[1:]:
-            tile.caption.setVisible(True)
+        if self._maximized >= count:
+            self._maximized = -1
         if self._active >= count:
             self._active = 0
+        self._relayout()
         self.set_labels(labels or [f"Camera {i + 1}" for i in range(count)])
         self._apply_placeholder()
         self._refresh_active()
+
+    def _relayout(self) -> None:
+        count = len(self._tiles)
+        for tile in self._tiles:
+            self._grid.removeWidget(tile)
+        if self._maximized >= 0:
+            for tile in self._tiles:
+                tile.setVisible(tile.index == self._maximized)
+            self._grid.addWidget(self._tiles[self._maximized], 0, 0)
+            columns, rows = 1, 1
+        else:
+            columns = 1 if count == 1 else 2 if count <= 4 else 3
+            for i, tile in enumerate(self._tiles):
+                tile.setVisible(True)
+                self._grid.addWidget(tile, i // columns, i % columns)
+            rows = int(math.ceil(count / columns))
+        for c in range(self._grid.columnCount()):
+            self._grid.setColumnStretch(c, 1 if c < columns else 0)
+        for r in range(self._grid.rowCount()):
+            self._grid.setRowStretch(r, 1 if r < rows else 0)
+        single = count == 1
+        for tile in self._tiles:
+            tile.caption.setVisible(not single)
+            # only a tile sitting in the grid doubles as a button
+            tile.click_to_zoom = not single and self._maximized < 0
 
     def _apply_placeholder(self) -> None:
         """The step-by-step hint only fits on a single tile; repeated four times it is noise."""
@@ -146,6 +175,26 @@ class VideoGrid(QWidget):
         self._active = index
         self._refresh_active()
         self.active_changed.emit(index)
+
+    @property
+    def maximized(self) -> int:
+        return self._maximized
+
+    def set_maximized(self, index: int) -> None:
+        """index < 0 puts the grid back."""
+        index = int(index)
+        if index >= len(self._tiles):
+            index = -1
+        if index == self._maximized:
+            return
+        self._maximized = index
+        if index >= 0:
+            self._active = index        # the camera you zoomed into is the one you draw on
+        self._relayout()
+        self._refresh_active()
+        self.maximize_changed.emit(self._maximized)
+        if index >= 0:
+            self.active_changed.emit(index)
 
     def _refresh_active(self) -> None:
         for tile in self._tiles:
