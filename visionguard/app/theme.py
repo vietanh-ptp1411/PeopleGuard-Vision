@@ -26,6 +26,11 @@ COLOR_HEADER = "#122234"          # app bar
 COLOR_HEADER_ALT = "#1B3149"      # badges inside the app bar
 COLOR_HEADER_TEXT = "#F2F6FB"
 COLOR_HEADER_DIM = "#93A8C0"
+COLOR_HEADER_LINE = "#2A4463"     # hairline between groups in the app bar
+#: The simulation badge is a warning, not a label: while it shows, not one bit reaches
+#: the real PLC. Amber on navy is the only thing in the bar loud enough to say that.
+COLOR_HEADER_WARN = "#F2A200"
+COLOR_HEADER_WARN_TEXT = "#1F1704"
 
 # --------------------------------------------------------------------------- text
 COLOR_TEXT = "#16202C"
@@ -156,20 +161,42 @@ QFrame[class="hline"] {{ background: {COLOR_BORDER}; max-height: 1px; border: no
 QFrame[class="vline"] {{ background: {COLOR_BORDER}; max-width: 1px; border: none; }}
 
 /* ---------------------------------------------------------------- app bar */
-QFrame#AppBar {{ background-color: {COLOR_HEADER}; border: none; }}
+QFrame#AppBar {{ background-color: {COLOR_HEADER}; border: none;
+                 border-bottom: 1px solid {COLOR_HEADER_LINE}; }}
 QFrame#AppBar QLabel {{ background: transparent; color: {COLOR_HEADER_TEXT}; }}
-QLabel[class="brand"] {{ font-size: 14pt; font-weight: 800; letter-spacing: 0.4px; }}
-QLabel[class="brandsub"] {{ color: {COLOR_HEADER_DIM}; font-size: 9pt; }}
-QLabel[class="headerbadge"] {{
+/* Every rule below is scoped under #AppBar on purpose. The line above carries an ID
+   selector, which outranks a plain class selector in Qt exactly as it does in CSS -
+   unscoped, it silently repaints every badge transparent and every dim caption white. */
+/* The wordmark is half black, so it needs paper under it to survive the navy. */
+QFrame[class="logoplate"] {{ background: #FFFFFF; border-radius: 7px; border: none; }}
+QFrame[class="headerline"] {{ background: {COLOR_HEADER_LINE}; border: none; }}
+QFrame#AppBar QLabel[class="brand"] {{ font-size: 14pt; font-weight: 800; letter-spacing: 0.3px; }}
+QFrame#AppBar QLabel[class="brandsub"] {{
+    color: {COLOR_HEADER_DIM}; font-size: 8.5pt; letter-spacing: 0.3px;
+}}
+QFrame#AppBar QLabel[class="headerbadge"] {{
     background-color: {COLOR_HEADER_ALT};
     color: {COLOR_HEADER_TEXT};
+    border: 1px solid {COLOR_HEADER_LINE};
     border-radius: 11px;
-    padding: 4px 12px;
+    padding: 4px 13px;
     font-size: 8.5pt;
     font-weight: 700;
     letter-spacing: 0.8px;
 }}
-QLabel[class="clock"] {{ color: {COLOR_HEADER_DIM}; font-size: 10pt; }}
+QFrame#AppBar QLabel[class="headerbadge"][tone="warn"] {{
+    background-color: {COLOR_HEADER_WARN};
+    color: {COLOR_HEADER_WARN_TEXT};
+    border: 1px solid {COLOR_HEADER_WARN};
+}}
+/* Monospaced digits: a proportional font makes the whole bar twitch every second. */
+QFrame#AppBar QLabel[class="clocktime"] {{
+    font-family: "Consolas", "Cascadia Mono", "DejaVu Sans Mono", monospace;
+    font-size: 13pt; font-weight: 700; letter-spacing: 0.5px;
+}}
+QFrame#AppBar QLabel[class="clockdate"] {{
+    color: {COLOR_HEADER_DIM}; font-size: 8pt; letter-spacing: 0.7px;
+}}
 
 /* ---------------------------------------------------------------- state chips */
 QFrame[class="chip"] {{
