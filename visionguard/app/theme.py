@@ -27,10 +27,6 @@ COLOR_HEADER_ALT = "#1B3149"      # badges inside the app bar
 COLOR_HEADER_TEXT = "#F2F6FB"
 COLOR_HEADER_DIM = "#93A8C0"
 COLOR_HEADER_LINE = "#2A4463"     # hairline between groups in the app bar
-#: The simulation badge is a warning, not a label: while it shows, not one bit reaches
-#: the real PLC. Amber on navy is the only thing in the bar loud enough to say that.
-COLOR_HEADER_WARN = "#F2A200"
-COLOR_HEADER_WARN_TEXT = "#1F1704"
 
 # --------------------------------------------------------------------------- text
 COLOR_TEXT = "#16202C"
@@ -174,21 +170,22 @@ QFrame#AppBar QLabel[class="brand"] {{ font-size: 14pt; font-weight: 800; letter
 QFrame#AppBar QLabel[class="brandsub"] {{
     color: {COLOR_HEADER_DIM}; font-size: 8.5pt; letter-spacing: 0.3px;
 }}
-QFrame#AppBar QLabel[class="headerbadge"] {{
+QFrame#AppBar QLabel[class="meterlabel"] {{
+    color: {COLOR_HEADER_DIM}; font-size: 7.5pt; font-weight: 700; letter-spacing: 1.2px;
+}}
+QFrame#AppBar QLabel[class="metervalue"] {{
+    font-family: "Consolas", "Cascadia Mono", "DejaVu Sans Mono", monospace;
+    font-size: 9pt; font-weight: 700;
+}}
+QProgressBar[class="meter"] {{
     background-color: {COLOR_HEADER_ALT};
-    color: {COLOR_HEADER_TEXT};
-    border: 1px solid {COLOR_HEADER_LINE};
-    border-radius: 11px;
-    padding: 4px 13px;
-    font-size: 8.5pt;
-    font-weight: 700;
-    letter-spacing: 0.8px;
+    border: none;
+    border-radius: 3px;
 }}
-QFrame#AppBar QLabel[class="headerbadge"][tone="warn"] {{
-    background-color: {COLOR_HEADER_WARN};
-    color: {COLOR_HEADER_WARN_TEXT};
-    border: 1px solid {COLOR_HEADER_WARN};
-}}
+/* Green while there is headroom, amber when it is getting tight, red when it is not. */
+QProgressBar[class="meter"]::chunk {{ background-color: {LED_COLORS['ok']}; border-radius: 3px; }}
+QProgressBar[class="meter"][tone="warn"]::chunk {{ background-color: {LED_COLORS['warn']}; }}
+QProgressBar[class="meter"][tone="high"]::chunk {{ background-color: {LED_COLORS['error']}; }}
 /* Monospaced digits: a proportional font makes the whole bar twitch every second. */
 QFrame#AppBar QLabel[class="clocktime"] {{
     font-family: "Consolas", "Cascadia Mono", "DejaVu Sans Mono", monospace;
