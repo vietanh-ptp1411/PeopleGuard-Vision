@@ -8,6 +8,7 @@ from __future__ import annotations
 import logging
 import logging.handlers
 import os
+import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -48,9 +49,20 @@ def setup_logging(log_dir: Path | str = "logs", level: int = logging.INFO, conso
     fmt = logging.Formatter(LOG_FORMAT, DATE_FORMAT)
 
     if console:
-        ch = logging.StreamHandler()
-        ch.setFormatter(fmt)
-        root.addHandler(ch)
+        # The log file is already UTF-8; the console is not. On Windows stderr falls back
+        # to the legacy code page, and one Vietnamese zone name - "Vùng nguy hiểm" - in a
+        # log line is then a UnicodeEncodeError inside the logging handler. Nothing the
+        # operator names should ever be able to break logging, so ask stderr for UTF-8 and
+        # settle for replacement characters if it cannot.
+        stream = sys.stderr
+        if stream is not None:                 # None in a frozen windowed build
+            try:
+                stream.reconfigure(encoding="utf-8", errors="replace")
+            except (AttributeError, ValueError, OSError):
+                pass
+            ch = logging.StreamHandler(stream)
+            ch.setFormatter(fmt)
+            root.addHandler(ch)
 
     try:
         fh = DailyFileHandler(Path(log_dir))

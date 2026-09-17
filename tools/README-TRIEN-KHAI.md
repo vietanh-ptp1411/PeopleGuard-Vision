@@ -208,11 +208,42 @@ Trước đây `backupCount=60` của bộ ghi log **không hề có tác dụng
 viết không đổi tên file cũ nên cơ chế xoá của Python không bao giờ khớp. File log tích luỹ
 vĩnh viễn.
 
-## Còn một điều nên biết
+## Lỗi crash lúc thoát — đã tìm ra và sửa
 
-Trong một lần chạy hàng loạt, `multicam_ux` **segfault một lần**; chạy lại 5 lần đều sạch
-nên chưa tái hiện được. Tôi đã bỏ các luồng ghi clip khi tính năng tắt để giảm bề mặt rủi
-ro, nhưng **chưa xác định được nguyên nhân**. Nếu gặp app tự tắt lúc thoát, xem
-`logs\launcher.log` — launcher sẽ ghi lại mã thoát và tự bật lại.
+Đóng cửa sổ trong lúc model YOLO còn đang nạp thì tiến trình **chết với mã
+`0xC0000409`**, không traceback, không dòng nào trong log. Launcher coi mọi mã thoát khác
+0 là crash và bật lại phần mềm — nên trên máy khách đây là **ứng dụng không tắt được**.
+
+Log đã nói ra từ đầu, chỉ là phải đọc ba dòng cùng nhau:
+
+```
+21:28:23  Shutting down
+21:28:26  InferenceWorker did not stop in time      ← hết hạn chờ 3 giây
+21:28:35  YOLO loaded: yolo11n.pt | cpu             ← 12 giây sau mới xong
+```
+
+Hàm tắt chờ mỗi worker 3 giây. Nạp yolo11n trên CPU mất khoảng 12 giây và **không gì ngắt
+được** — cờ dừng không, `requestInterruption` cũng không, vì luồng đang nằm sâu trong
+torch. Hết hạn, nó ghi cảnh báo rồi bỏ đi, để lại một `QThread` còn sống; huỷ luồng đang
+chạy thì Qt gọi `qFatal`, mà trên Windows `qFatal` là fast-fail không cứu được.
+
+Giờ worker báo nó đang nạp model và hàm tắt chờ hết (trần 30 giây). Nếu một worker vẫn
+không dừng, phần mềm **thoát ngay bằng `os._exit(0)`** thay vì huỷ luồng đang chạy —
+không dùng `QThread.terminate()`, vì giết luồng đang giữ GIL làm tiến trình **treo**, mà
+treo còn tệ hơn crash: launcher bật lại được tiến trình đã thoát, nhưng không thấy được
+tiến trình bị kẹt. Lúc đó mọi thứ cần ghi đã ghi xong: clip đã đóng, CSDL đã đóng, config
+đã lưu từ trước.
+
+Cửa sổ cũng ẩn đi trước khi tắt worker, nên chờ nạp model là *cửa sổ biến mất, tiến trình
+nán lại* chứ không phải cửa sổ đứng hình 10 giây.
+
+Đo trước khi sửa: 3/5 lần crash khi máy rảnh, 7/7 khi máy đang tải nặng. Sau khi sửa: sạch.
+
+## Mật khẩu camera trong log — đã bịt
+
+Hàm che URL cắt ở dấu `@` **đầu tiên**. Hikvision bắt buộc mật khẩu có ký tự đặc biệt và
+`@` là lựa chọn phổ biến, nên `rtsp://admin:Hik@2026!@192.168.1.64/...` bị che thành
+`rtsp://admin:***@2026!@192.168.1.64/...` — **lọt `2026!` ra log**. Giờ cắt ở `@` cuối
+cùng của phần authority, đúng như RFC 3986, và cả dự án dùng chung một hàm duy nhất.
 
 Và như mọi khi: đây là thiết bị giám sát, không phải thiết bị an toàn đạt chuẩn.

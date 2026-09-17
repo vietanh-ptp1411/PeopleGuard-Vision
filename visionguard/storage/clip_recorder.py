@@ -163,7 +163,11 @@ class ClipRecorder:
         if sample is None:
             return                                  # nothing to size the file from yet
         when = datetime.now()
-        folder = Path(self.config.directory) / when.strftime("%Y-%m-%d") / self._slug(self.label)
+        # A label of "!!!" or an emoji slugs away to nothing, and an empty folder name
+        # quietly collapses the per-camera split - every camera then writes into the date
+        # folder, where two of them tripping in the same second overwrite each other.
+        folder = (Path(self.config.directory) / when.strftime("%Y-%m-%d")
+                  / (self._slug(self.label) or f"camera-{self.camera + 1}"))
         tag = self._slug(zone) or "PERSON"
         path = folder / f"{when.strftime('%H-%M-%S')}_{tag}.mp4"
         height, width = sample.shape[:2]

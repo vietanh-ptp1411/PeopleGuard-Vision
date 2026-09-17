@@ -9,6 +9,7 @@ from urllib.parse import quote
 
 import cv2
 
+from ..utils.redact import mask_url  # noqa: F401 (re-exported)
 from ..config.schemas import RtspCameraConfig
 from .base_camera import BaseCamera, CameraInfo, Frame
 
@@ -42,15 +43,7 @@ def build_rtsp_url(cfg: RtspCameraConfig) -> str:
     return f"rtsp://{auth}{cfg.ip}{port}{path}"
 
 
-def mask_url(url: str) -> str:
-    """Hide credentials for logging."""
-    if "@" in url and "//" in url:
-        head, tail = url.split("//", 1)
-        creds, rest = tail.split("@", 1)
-        if ":" in creds:
-            user = creds.split(":", 1)[0]
-            return f"{head}//{user}:***@{rest}"
-    return url
+
 
 
 def _apply_transport_env(transport: str) -> None:

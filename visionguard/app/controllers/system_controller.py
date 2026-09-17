@@ -7,6 +7,7 @@ the PLC output state, and republishes compact signals for the widgets.
 from __future__ import annotations
 
 import logging
+import os
 import threading
 import time
 from typing import Dict, List, Optional
@@ -105,6 +106,8 @@ class SystemController(QObject):
 
         # workers
         self.camera_worker = CameraWorker(self.camera_manager, self.buffer, self.settings.camera)
+        # No point handing the UI more pictures per second than it can draw.
+        self.camera_worker.set_preview_fps(self.settings.app.ui_fps_limit)
         self.inference_worker = InferenceWorker(self.detector, self.buffer, self.pipeline)
         self.event_worker = CameraEventWorker(self.event_manager, self.settings.camera.ai_camera,
                                               self.settings.camera.brand_enum)
@@ -224,6 +227,7 @@ class SystemController(QObject):
             buffer = LatestFrameBuffer()
             pipeline = ProcessingPipeline(self.roi_manager, self.settings.ai.logic, camera=index)
             worker = CameraWorker(CameraManager(), buffer, unit, index=index)
+            worker.set_preview_fps(self.settings.app.ui_fps_limit)
             events = CameraEventWorker(EventManager(), unit.ai_camera, unit.brand_enum)
             self.buffers.append(buffer)
             self.pipelines.append(pipeline)
@@ -732,10 +736,11 @@ class SystemController(QObject):
         workers = (self.inference_worker, self.plc_worker, *self.camera_workers, *self.event_workers)
         for w in workers:
             w.stop_worker()
-        for w in workers:
-            self._join(w)
+        stubborn = [w for w in workers if not self._join(w)]
         self.snapshots.shutdown()
         self.events.close()
+        if stubborn:
+            self._leave_now(stubborn)
 
     #: A worker that outlives this call is not a warning, it is a crash: Qt calls qFatal
     #: on a QThread destroyed while still running, and on Windows that is a fast-fail the
@@ -746,44 +751,70 @@ class SystemController(QObject):
     #: twelve seconds for yolo11n on CPU, and more on a machine that is busy.
     JOIN_LOADING_MS = 30000
 
-    def _join(self, worker) -> None:
-        """Wait for one worker, and be certain it is dead before returning."""
+    #: A camera opening an RTSP stream sits in FFmpeg for as long as its open timeout,
+    #: five seconds by default, and cannot be interrupted there either.
+    JOIN_INTERRUPT_MS = 6000
+
+    def _join(self, worker) -> bool:
+        """Wait for one worker. True if it really stopped, False if it is still alive."""
         name = type(worker).__name__
         started = time.monotonic()
         if worker.wait(self.JOIN_GRACE_MS):
             log.debug("%s stopped in %.0f ms", name, (time.monotonic() - started) * 1000)
-            return
+            return True
 
         if getattr(worker, "is_loading", lambda: False)():
             log.info("%s is still loading the model - waiting for it to finish", name)
             if worker.wait(self.JOIN_LOADING_MS):
                 log.info("%s stopped after the load finished (%.1f s)", name,
                          time.monotonic() - started)
-                return
+                return True
 
         log.warning("%s still running after %.1f s - interrupting", name,
                     time.monotonic() - started)
         worker.requestInterruption()
-        if worker.wait(4000):
+        if worker.wait(self.JOIN_INTERRUPT_MS):
             log.warning("%s stopped after being interrupted (%.1f s)", name,
                         time.monotonic() - started)
-            return
-        # Everything that had to reach disk already has: the recorders are closed, the
-        # event database is about to be, and the config was saved before we got here.
-        # Killing the thread is ugly; letting it be destroyed while running is fatal.
-        log.error("%s will not stop after %.1f s - terminating it", name,
-                  time.monotonic() - started)
-        worker.terminate()
-        worker.wait()
+            return True
+        log.error("%s will not stop after %.1f s", name, time.monotonic() - started)
+        return False
+
+    def _leave_now(self, stubborn) -> None:
+        """Exit the process rather than let a live worker thread be destroyed.
+
+        QThread::terminate would be the obvious move and it is a trap: it kills the
+        thread at the OS level, and a thread killed while it holds the GIL never gives
+        it back, so the process hangs instead of closing. A hang is worse than a crash
+        here - the launcher restarts a process that exits, but it cannot see one that
+        is wedged.
+
+        Leaving immediately is safe because nothing is left to write: the recorders are
+        closed, the event database is closed, and the configuration was saved before
+        shutdown was even called. Exit code 0 because the operator did ask it to close.
+        """
+        names = ", ".join(sorted({type(w).__name__ for w in stubborn}))
+        log.error("%s would not stop. Everything is saved; leaving the process now "
+                  "rather than destroying a thread that is still running.", names)
+        logging.shutdown()
+        os._exit(0)
 
     # ================================================================== worker callbacks
     def _on_frame(self, frame: Frame) -> None:
-        self._last_frames[frame.camera] = frame
-        if self.settings.app.clip.enabled and frame.camera < len(self.recorders):
-            self.recorders[frame.camera].submit(frame.image, frame.timestamp)
-        if frame.camera == 0:
-            self._last_frame = frame      # newest picture, used for AI camera event snapshots
-        self.frame_ready.emit(frame)
+        try:
+            self._last_frames[frame.camera] = frame
+            if self.settings.app.clip.enabled and frame.camera < len(self.recorders):
+                self.recorders[frame.camera].submit(frame.image, frame.timestamp)
+            if frame.camera == 0:
+                self._last_frame = frame  # newest picture, used for AI camera event snapshots
+            self.frame_ready.emit(frame)
+        finally:
+            # Tell the camera we are ready for the next one. In a finally block because a
+            # preview that stops forever after one unlucky exception is worse than the
+            # exception, and the worker would otherwise wait on an acknowledgement that
+            # never comes.
+            if 0 <= frame.camera < len(self.camera_workers):
+                self.camera_workers[frame.camera].preview_delivered()
 
     def _on_camera_state(self, state: str, msg: str) -> None:
         if state in ("TEST_OK", "TEST_FAIL"):

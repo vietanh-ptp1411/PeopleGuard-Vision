@@ -51,12 +51,18 @@ class CameraWorker(QThread):
         self._camera: Optional[BaseCamera] = None
         self._commands: "queue.Queue[Tuple[str, Any]]" = queue.Queue()
         self._running = True
+        self._unexpected = 0
         self._state = CameraState.DISCONNECTED
         self._want_streaming = False
         self._reconnect_attempt = 0
         self._next_retry = 0.0
         self._last_frame_time = 0.0
         self._fps = FpsCounter()
+        # Preview pacing. See _emit_preview for why this exists at all.
+        self._preview_fps = 30.0
+        self._preview_due = 0.0
+        self._preview_inflight = False
+        self._preview_sent_at = 0.0
         self._last_fps_emit = 0.0
         self._last_pos_emit = 0.0
 
@@ -91,22 +97,51 @@ class CameraWorker(QThread):
         self._commands.put(("quit", None))
 
     # ------------------------------------------------------------------ thread body
-    def run(self) -> None:  # noqa: C901 (worker loop)
+    def run(self) -> None:
         log.debug("Camera worker started")
         while self._running:
-            self._drain_commands()
-            if not self._running:
-                break
-            cam = self._camera
-            if cam is not None and self._state == CameraState.STREAMING:
-                self._grab(cam)
-            elif self._state == CameraState.RECONNECTING:
-                self._try_reconnect()
-                self._sleep_for_command(0.1)
-            else:
-                self._sleep_for_command(0.05)
+            try:
+                self._step()
+            except Exception as exc:
+                self._on_unexpected(exc)
         self._teardown()
         log.debug("Camera worker stopped")
+
+    def _step(self) -> None:
+        self._drain_commands()
+        if not self._running:
+            return
+        cam = self._camera
+        if cam is not None and self._state == CameraState.STREAMING:
+            self._grab(cam)
+        elif self._state == CameraState.RECONNECTING:
+            self._try_reconnect()
+            self._sleep_for_command(0.1)
+        else:
+            self._sleep_for_command(0.05)
+
+    def _on_unexpected(self, exc: Exception) -> None:
+        """A camera thread that dies takes its camera with it, silently and for good.
+
+        OpenCV throws out of a plain cap.read() - a failed allocation, a codec giving up
+        on a damaged stream. Unhandled it walks straight out of run(): PySide prints
+        "Error calling Python override of QThread::run()" to a console nobody is reading,
+        the tile freezes on its last picture, and no reconnect ever runs because the loop
+        that would do the reconnecting is the thing that just died.
+
+        From outside, this is indistinguishable from the camera being unplugged, so it
+        goes down the path that already handles that and is already tested.
+        """
+        log.exception("Camera %d: unexpected error in the worker loop: %s", self.index, exc)
+        self._unexpected += 1
+        try:
+            self._on_lost(f"unexpected error: {exc}")
+        except Exception:
+            log.exception("Camera %d: recovering from that error failed too", self.index)
+            self._set_state(CameraState.ERROR, str(exc))
+        # If it keeps throwing, back off instead of burning a core writing tracebacks.
+        # _sleep_for_command returns at once when a stop arrives, so this never delays exit.
+        self._sleep_for_command(min(0.5 * self._unexpected, 5.0))
 
     def _sleep_for_command(self, timeout: float) -> None:
         try:
@@ -239,6 +274,41 @@ class CameraWorker(QThread):
                 self._last_frame_time = time.monotonic()
                 self._set_state(CameraState.STREAMING, "Streaming")
 
+    # ------------------------------------------------------------------ preview
+    #: If the UI never acknowledges a frame (an exception on its side), let the preview
+    #: resume rather than freeze for good.
+    PREVIEW_STALE_S = 2.0
+
+    def set_preview_fps(self, fps: float) -> None:
+        """How often at most to hand the UI a picture. 0 means every frame."""
+        self._preview_fps = max(0.0, float(fps or 0.0))
+
+    def preview_delivered(self) -> None:
+        """Called from the UI thread once it has taken the frame it was given."""
+        self._preview_inflight = False
+
+    def _emit_preview(self, frame, now: float) -> None:
+        """Give the UI a frame only when it is ready for one.
+
+        A queued signal has no backpressure. Emitting every captured frame means that
+        the moment the UI thread falls behind - a dialog, a slow repaint, a busy machine,
+        a video source with realtime off - the events pile up in its queue and each one
+        holds a full picture. Measured at 652 frames/s across three cameras: 930 MB grew
+        to 9955 MB in 49 seconds and was still climbing.
+
+        Detection is not affected. The inference worker reads from the buffer, which
+        keeps only the newest frame, so a skipped preview never costs a detection.
+        """
+        if self._preview_inflight and now - self._preview_sent_at < self.PREVIEW_STALE_S:
+            return                       # the UI has not taken the last one yet
+        interval = 1.0 / self._preview_fps if self._preview_fps > 0 else 0.0
+        if interval and now < self._preview_due:
+            return
+        self._preview_due = max(now, self._preview_due) + interval
+        self._preview_inflight = True
+        self._preview_sent_at = now
+        self.frame_ready.emit(frame)
+
     # ------------------------------------------------------------------ grabbing
     def _grab(self, cam: BaseCamera) -> None:
         frame = cam.get_frame(timeout=0.5)
@@ -247,7 +317,7 @@ class CameraWorker(QThread):
             self._last_frame_time = now
             frame.camera = self.index      # the index travels with the picture
             self._buffer.put(frame)
-            self.frame_ready.emit(frame)
+            self._emit_preview(frame, now)
             self._fps.tick(now)
             if now - self._last_fps_emit > 0.5:
                 self._last_fps_emit = now
