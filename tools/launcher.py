@@ -102,7 +102,15 @@ def main() -> int:
                     help="seconds to keep retrying pre-flight at boot (default 180)")
     ap.add_argument("--no-restart", action="store_true", help="do not supervise")
     ap.add_argument("--skip-preflight", action="store_true")
+    ap.add_argument("--check-only", action="store_true",
+                    help="print the pre-flight report and exit, without starting anything")
     args, extra = ap.parse_known_args()
+
+    if args.check_only:
+        # The launcher is the console exe of the pair, so this is where a report can
+        # actually be read; the windowed application has nowhere to print.
+        from visionguard.diagnostics.preflight import main as preflight_main
+        return preflight_main("config")
 
     log = setup_log()
     log.info("=" * 60)

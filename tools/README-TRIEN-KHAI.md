@@ -1,10 +1,42 @@
 # VisionGuard — cài đặt và chạy 24/7 trên máy khách
 
-Có **hai** cách đưa phần mềm sang máy khác. Cách A là cách nên dùng.
+Có hai gói sẵn trong `release\`:
+
+| Gói | Dung lượng | Dùng khi |
+|---|---|---|
+| **`VisionGuard-GPU.zip`** | 3,08 GB | Máy khách **có card NVIDIA** — nhanh nhất |
+| **`VisionGuard-Setup.exe`** | 377 MB | Máy khách **không có card rời**, hoặc muốn gọn |
+
+Cả hai đều không cần cài Python và không cần mạng trên máy đích.
 
 ---
 
-# Cách A — Bộ cài một file (khuyên dùng)
+# Gói GPU — `VisionGuard-GPU.zip`
+
+Chép zip sang máy khách, **giải nén vào một thư mục ghi được** (ví dụ `C:\VisionGuard` —
+đừng đặt trong `Program Files`, xem lý do bên dưới), rồi bấm đúp **`Install.bat`** bên
+trong.
+
+`Install.bat` tạo lối tắt, đăng ký tự khởi động khi đăng nhập Windows, rồi chạy kiểm tra
+hệ thống.
+
+Gói này kèm **torch 2.11.0+cu128**. Máy khách cần:
+
+- Card NVIDIA đời Turing (GTX 16xx / RTX 20xx) trở lên
+- Driver NVIDIA đủ mới cho CUDA 12.8 — driver từ 2025 trở đi là an toàn
+
+Đã chạy thử trên GTX 1650: log ghi `YOLO loaded: yolo11n.pt | cuda:0`.
+
+Nếu máy không có card hợp lệ, phần mềm vẫn chạy nhưng tự rơi về CPU (chậm hơn, vẫn dùng
+được vì bộ phát hiện đã giới hạn 12 fps).
+
+Vì sao là zip chứ không phải một file exe như bản CPU: với CUDA bộ gói nặng khoảng 5 GB,
+mà bộ cài one-file sẽ phải giải nén cả 5 GB ra thư mục tạm **mỗi lần chạy**. Zip trung
+thực hơn và chỉ tốn một lần giải nén.
+
+---
+
+# Gói CPU — `VisionGuard-Setup.exe` (bộ cài một file)
 
 Chép **`release\VisionGuard-Setup.exe`** (377 MB) sang máy khách rồi bấm đúp. Xong.
 
@@ -42,13 +74,14 @@ Bộ cài kèm **torch bản CPU**. Lý do: bản CUDA nặng 4.4 GB so với 52
 
 Máy nào thật sự cần GPU thì dùng **Cách B** với `-Gpu`.
 
-### Build lại bộ cài
+### Build lại hai gói
 
 ```
-build\venv\Scripts\python.exe build\make_installer.py
+build\venv\Scripts\python.exe      build\make_installer.py                       (bo cai CPU, ~7 phut)
+build\venv-gpu\Scripts\python.exe  build\make_zip.py --venv venv-gpu --name GPU   (zip GPU, ~10 phut)
 ```
 
-Mất khoảng 7 phút. Kết quả nằm ở `release\VisionGuard-Setup.exe`.
+Kết quả nằm trong `release\`.
 
 ---
 
