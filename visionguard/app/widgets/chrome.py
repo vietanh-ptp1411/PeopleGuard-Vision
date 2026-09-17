@@ -112,13 +112,14 @@ class AppBar(QFrame):
 class AreaBanner(QFrame):
     """The single most important readout, sized to be legible across the room."""
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(self, large: bool = False, parent: QWidget | None = None) -> None:
         super().__init__(parent)
+        self.large = bool(large)
         self.setMinimumWidth(228)
-        self.setFixedHeight(48)
+        self.setFixedHeight(104 if large else 48)
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(18, 4, 18, 4)
-        lay.setSpacing(0)
+        lay.setContentsMargins(18, 10 if large else 4, 18, 10 if large else 4)
+        lay.setSpacing(2 if large else 0)
         self.caption = QLabel("AREA STATUS")
         self.caption.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.value = QLabel(status_caption("STOPPED"))
@@ -134,8 +135,8 @@ class AreaBanner(QFrame):
         self.setStyleSheet(f"QFrame {{ background: {color}; border-radius: 8px; border: none; }}")
         self.caption.setStyleSheet(f"color: {fg}; font-size: 7.5pt; font-weight: 700;"
                                    f" letter-spacing: 1.4px; background: transparent;")
-        self.value.setStyleSheet(f"color: {fg}; font-size: 15pt; font-weight: 800;"
-                                 f" letter-spacing: 1.2px; background: transparent;")
+        self.value.setStyleSheet(f"color: {fg}; font-size: {24 if self.large else 15}pt;"
+                                 f" font-weight: 800; letter-spacing: 1.4px; background: transparent;")
 
 
 # --------------------------------------------------------------------------- state chip
