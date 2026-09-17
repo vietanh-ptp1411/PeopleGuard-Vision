@@ -28,7 +28,7 @@ class RoiPanel(QWidget):
     selection_changed = Signal(str)
     fields_changed = Signal(str, str, str, bool)   # id, name, plc_device, enabled
 
-    COLS = ("ID", "Name", "Type", "On", "PLC", "Pts", "State")
+    COLS = ("ID", "Cam", "Name", "Type", "On", "PLC", "Pts", "State")
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -49,6 +49,11 @@ class RoiPanel(QWidget):
         lay.setSpacing(8)
 
         lay.addWidget(page_header("Zones", "Vẽ polygon: người trong vùng sẽ bật bit PLC"))
+        self.lbl_target = QLabel("")
+        self.lbl_target.setWordWrap(True)
+        self.lbl_target.setStyleSheet(f"color: {COLOR_OK}; font-weight: 600;")
+        self.lbl_target.hide()
+        lay.addWidget(self.lbl_target)
 
         g_act = QGroupBox("ROI EDITOR")
         gl = QGridLayout(g_act)
@@ -92,7 +97,7 @@ class RoiPanel(QWidget):
         header.setStretchLastSection(False)
         for col in range(len(self.COLS)):
             header.setSectionResizeMode(
-                col, QHeaderView.ResizeMode.Stretch if col == 1 else QHeaderView.ResizeMode.ResizeToContents)
+                col, QHeaderView.ResizeMode.Stretch if col == 2 else QHeaderView.ResizeMode.ResizeToContents)
         self.table.verticalHeader().setVisible(False)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
@@ -138,13 +143,14 @@ class RoiPanel(QWidget):
         self.table.setRowCount(len(rois))
         for row, r in enumerate(rois):
             st = states.get(r.id)
-            vals = [r.id, r.name, r.type.label, "Y" if r.enabled else "N", r.plc_device or "-", str(len(r.points)),
+            vals = [r.id, str(int(getattr(r, "camera", 0)) + 1), r.name, r.type.label,
+                    "Y" if r.enabled else "N", r.plc_device or "-", str(len(r.points)),
                     (st.value if st else ("-" if r.is_include else "n/a"))]
             for col, v in enumerate(vals):
                 it = QTableWidgetItem(v)
-                if col in (3, 5):
+                if col in (1, 4, 6):
                     it.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-                if col == 6 and st is not None:
+                if col == 7 and st is not None:
                     it.setForeground(QColor(COLOR_ERROR if st.occupied else COLOR_OK))
                 if not r.enabled:
                     it.setForeground(QColor(COLOR_TEXT_MUTED))
@@ -179,6 +185,13 @@ class RoiPanel(QWidget):
                 break
         self.table.blockSignals(False)
         self._fill_fields()
+
+    def set_camera_context(self, label: str, several: bool) -> None:
+        """Name the camera a new zone would be drawn on, when there is a choice."""
+        self.lbl_target.setVisible(several)
+        if several:
+            self.lbl_target.setText(f"Vùng mới sẽ thuộc về: {label}  —  bấm vào ô hình của camera "
+                                    f"khác để đổi")
 
     def set_mode(self, mode: str) -> None:
         drawing = mode == "drawing"

@@ -291,26 +291,18 @@ class MainWindow(QMainWindow):
         lay.setSpacing(6)
 
         lay.addWidget(caption("CAMERA"))
-        self.btn_q_connect = _button("Connect", "", "sm", "Kết nối camera đang chọn ở tab Camera")
-        self.btn_q_start = _button("Start", "success", "sm", "Bật luồng hình")
-        self.btn_q_stop = _button("Stop", "", "sm", "Dừng luồng hình")
-        for b in (self.btn_q_connect, self.btn_q_start, self.btn_q_stop):
+        self.btn_q_connect = _button("Connect", "", "sm", "Mở kết nối tới mọi camera trong nhóm")
+        self.btn_q_disconnect = _button("Disconnect", "", "sm", "Ngắt kết nối mọi camera")
+        for b in (self.btn_q_connect, self.btn_q_disconnect):
             lay.addWidget(b)
         lay.addSpacing(6)
         lay.addWidget(separator())
         lay.addSpacing(6)
 
-        lay.addWidget(caption("ZONES"))
-        self.btn_q_add = _button("+ Zone", "primary", "sm", "Vẽ vùng giám sát: click từng điểm, double-click để đóng")
-        self.btn_q_ex = _button("+ Exclusion", "", "sm", "Vẽ vùng loại trừ (người trong vùng này không tính)")
-        self.btn_q_finish = _button("Finish", "", "sm", "Đóng polygon đang vẽ (Enter)")
-        self.btn_q_edit = _button("Edit", "", "sm", "Kéo đỉnh để sửa vùng; Shift+click cạnh để thêm đỉnh")
-        self.btn_q_edit.setCheckable(True)
-        self.btn_q_save = _button("Save", "success", "sm", "Lưu cấu hình vùng ra config/roi_config.json")
-        self.btn_q_finish.setEnabled(False)
-        for b in (self.btn_q_add, self.btn_q_ex, self.btn_q_finish, self.btn_q_edit, self.btn_q_save):
-            lay.addWidget(b)
-        lay.addSpacing(10)
+        self.btn_restore = _button("⤢  Thu nhỏ", "", "sm", "Trở lại lưới nhiều camera")
+        self.btn_restore.hide()
+        lay.addWidget(self.btn_restore)
+        lay.addSpacing(8)
 
         self.lbl_video_hint = ElidedLabel("")
         self.lbl_video_hint.setStyleSheet(f"color: {COLOR_TEXT_MUTED}; font-size: 9pt;")
@@ -377,9 +369,6 @@ class MainWindow(QMainWindow):
         self.video.active_changed.connect(self._on_active_camera)
         cc.connect_requested.connect(c.camera_connect)
         cc.disconnect_requested.connect(c.camera_disconnect)
-        cc.start_requested.connect(c.camera_start)
-        cc.stop_requested.connect(c.camera_stop)
-        cc.test_requested.connect(c.camera_test)
         cc.scan_requested.connect(c.scan_devices)
         cc.rtsp_test_requested.connect(c.rtsp_test)
         cc.video_command.connect(c.video_command)
@@ -423,8 +412,8 @@ class MainWindow(QMainWindow):
 
         # ROI panel + video editor
         rp, v = self.roi_panel, self.video
-        rp.add_include_requested.connect(lambda: v.start_drawing(RoiType.INCLUDE))
-        rp.add_exclude_requested.connect(lambda: v.start_drawing(RoiType.EXCLUDE))
+        rp.add_include_requested.connect(lambda: self._begin_drawing(RoiType.INCLUDE))
+        rp.add_exclude_requested.connect(lambda: self._begin_drawing(RoiType.EXCLUDE))
         rp.finish_requested.connect(v.finish_drawing)
         rp.cancel_requested.connect(v.cancel_drawing)
         rp.edit_mode_toggled.connect(v.set_edit_mode)
@@ -442,13 +431,9 @@ class MainWindow(QMainWindow):
 
         # quick bar
         self.btn_q_connect.clicked.connect(self._quick_camera_connect)
-        self.btn_q_start.clicked.connect(self._quick_camera_start)
-        self.btn_q_stop.clicked.connect(c.camera_stop)
-        self.btn_q_add.clicked.connect(lambda: self._start_drawing(RoiType.INCLUDE))
-        self.btn_q_ex.clicked.connect(lambda: self._start_drawing(RoiType.EXCLUDE))
-        self.btn_q_finish.clicked.connect(v.finish_drawing)
-        self.btn_q_edit.toggled.connect(v.set_edit_mode)
-        self.btn_q_save.clicked.connect(self._save_rois)
+        self.btn_q_disconnect.clicked.connect(c.camera_disconnect)
+        self.btn_restore.clicked.connect(lambda: self.video.set_maximized(-1))
+        self.video.maximize_changed.connect(self._on_maximize_changed)
 
     # ================================================================== small helpers
     def toggle_fullscreen(self) -> None:
@@ -464,17 +449,15 @@ class MainWindow(QMainWindow):
     def _show_message(self, text: str) -> None:
         self.statusBar().showMessage(text, 10000)
 
-    def _start_drawing(self, rtype: RoiType) -> None:
-        self.tabs.setCurrentIndex(TAB_ROI)
-        self.video.start_drawing(rtype)
-
     def _quick_camera_connect(self) -> None:
         self.camera_cfg.apply_now()   # push the form values before connecting
         self.ctrl.camera_connect()
 
-    def _quick_camera_start(self) -> None:
-        self.camera_cfg.apply_now()
-        self.ctrl.camera_start()
+    def _begin_drawing(self, rtype: RoiType) -> None:
+        """A polygon is drawn on one picture, so zoom into that camera first."""
+        if self.video.count > 1 and self.video.maximized < 0:
+            self.video.set_maximized(self.video.active)
+        self.video.start_drawing(rtype)
 
     def _open_alert_tab(self) -> None:
         self.tabs.setCurrentIndex(getattr(self, "_alert_tab", TAB_STATUS))
@@ -522,10 +505,13 @@ class MainWindow(QMainWindow):
     def _update_camera_buttons(self, state: str) -> None:
         connected = state in (CameraState.CONNECTED, CameraState.STREAMING, CameraState.FINISHED,
                               CameraState.RECONNECTING)
-        streaming = state in (CameraState.STREAMING, CameraState.RECONNECTING)
         self.btn_q_connect.setEnabled(not connected)
-        self.btn_q_start.setEnabled(not streaming)
-        self.btn_q_stop.setEnabled(streaming or state == CameraState.FINISHED)
+        self.btn_q_disconnect.setEnabled(connected or state == CameraState.LOST)
+
+    def _on_maximize_changed(self, index: int) -> None:
+        """Only a maximised tile can be put back."""
+        self.btn_restore.setVisible(index >= 0)
+        self._on_active_camera(self.video.active)
 
     def _on_model_status(self, loaded: bool, msg: str) -> None:
         failed = "failed" in msg.lower()
@@ -572,10 +558,6 @@ class MainWindow(QMainWindow):
 
     def _on_editor_mode(self, mode: str) -> None:
         self.roi_panel.set_mode(mode)
-        self.btn_q_edit.blockSignals(True)
-        self.btn_q_edit.setChecked(mode == "edit")
-        self.btn_q_edit.blockSignals(False)
-        self.btn_q_finish.setEnabled(mode == "drawing")
         self.lbl_video_hint.setText({
             "drawing": "Click thêm điểm  ·  double-click / Enter để đóng  ·  chuột phải hoàn tác  ·  Esc huỷ",
             "edit": "Kéo đỉnh để sửa  ·  Shift+click cạnh để thêm đỉnh  ·  chuột phải xoá đỉnh  ·  Delete xoá vùng",
@@ -607,10 +589,6 @@ class MainWindow(QMainWindow):
         self.chip_zones.set_caption("REGIONS" if ai else "ZONES")
         provider = self.ctrl.settings.camera.ai_camera.provider_enum
         self.event_monitor.set_simulation_available(provider == EventProviderType.MOCK)
-        for btn in (self.btn_q_add, self.btn_q_ex, self.btn_q_finish, self.btn_q_edit, self.btn_q_save):
-            btn.setEnabled(not ai)
-            if ai:
-                btn.setToolTip("Chế độ AI Camera: vùng được cấu hình trong camera (xem tab AI Events)")
         self.lbl_video_hint.setText(self._idle_hint())
         self.lbl_source.setText(self.camera_cfg.get_config().describe_source())
         self.video.set_display_mode("raw" if ai else self.video._display_mode)
@@ -625,6 +603,8 @@ class MainWindow(QMainWindow):
 
     def _on_active_camera(self, index: int) -> None:
         """Which camera a new zone would be drawn on."""
+        cfg_now = self.ctrl.settings.camera
+        self.roi_panel.set_camera_context(cfg_now.label(index), self.video.count > 1)
         if self.video.count <= 1:
             self.lbl_source.setText(self.ctrl.settings.camera.describe_source())
             return

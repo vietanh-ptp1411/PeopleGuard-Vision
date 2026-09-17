@@ -597,8 +597,10 @@ class SystemController(QObject):
         self._log_event(EventType.SYSTEM_START,
                         details=f"{self.detection_mode.label} / "
                                 f"{'Simulation' if self.settings.plc.simulation_mode else 'Real PLC'}")
-        if self._camera_state != CameraState.STREAMING:
-            self.camera_worker.request_start()
+        # every camera in the group: request_start connects first when it has to
+        for index, worker in enumerate(self.camera_workers):
+            if self._camera_states.get(index) != CameraState.STREAMING:
+                worker.request_start()
         if not self._plc_connected:
             self.plc_worker.request_connect()
 
@@ -607,12 +609,16 @@ class SystemController(QObject):
             # NOT reset - a person already reported inside stays inside.
             if not self._event_timer.isActive():
                 self._event_timer.start()
-            if self._event_channel not in (EventChannelState.ONLINE, EventChannelState.CONNECTING):
-                self.event_worker.request_connect()
+            for index, events in enumerate(self.event_workers):
+                if self._channel_states.get(index) not in (EventChannelState.ONLINE,
+                                                           EventChannelState.CONNECTING):
+                    events.request_connect()
         else:
             self._last_result = None
             self._last_result_time = 0.0
-            self.pipeline.reset()
+            self._results.clear()
+            for pipeline in self.pipelines:
+                pipeline.reset()
             if self._model_loaded:
                 self.inference_worker.start_detection()
             else:

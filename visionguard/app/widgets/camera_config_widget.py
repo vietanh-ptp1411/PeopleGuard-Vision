@@ -30,9 +30,6 @@ class CameraConfigWidget(QWidget):
     camera_count_changed = Signal(int)
     connect_requested = Signal()
     disconnect_requested = Signal()
-    start_requested = Signal()
-    stop_requested = Signal()
-    test_requested = Signal()
     scan_requested = Signal(str)            # camera type value
     rtsp_test_requested = Signal()
     video_command = Signal(str, object)     # pause/resume/toggle/restart/seek/loop
@@ -164,18 +161,14 @@ class CameraConfigWidget(QWidget):
         self.btn_apply = _btn("Apply && Save", "primary")
         self.btn_connect = _btn("Connect")
         self.btn_disconnect = _btn("Disconnect")
-        self.btn_start = _btn("Start", "success")
-        self.btn_stop = _btn("Stop", "danger")
-        self.btn_test = _btn("Test Camera")
         gl.addWidget(self.btn_apply, 0, 0, 1, 2)
         gl.addWidget(self.btn_connect, 1, 0)
         gl.addWidget(self.btn_disconnect, 1, 1)
-        gl.addWidget(self.btn_start, 2, 0)
-        gl.addWidget(self.btn_stop, 2, 1)
-        gl.addWidget(self.btn_test, 3, 0, 1, 2)
+        gl.addWidget(hint("START trên thanh lệnh sẽ tự mở và chạy mọi camera - "
+                          "ở đây chỉ cần Connect để kiểm tra đường truyền."), 2, 0, 1, 2)
         self.lbl_status = QLabel("")
         self.lbl_status.setWordWrap(True)
-        gl.addWidget(self.lbl_status, 4, 0, 1, 2)
+        gl.addWidget(self.lbl_status, 3, 0, 1, 2)
         lay.addWidget(g_ctl)
         lay.addStretch(1)
 
@@ -188,9 +181,6 @@ class CameraConfigWidget(QWidget):
         self.btn_apply.clicked.connect(self._apply)
         self.btn_connect.clicked.connect(lambda: (self._apply(), self.connect_requested.emit()))
         self.btn_disconnect.clicked.connect(self.disconnect_requested)
-        self.btn_start.clicked.connect(lambda: (self._apply(), self.start_requested.emit()))
-        self.btn_stop.clicked.connect(self.stop_requested)
-        self.btn_test.clicked.connect(lambda: (self._apply(), self.test_requested.emit()))
 
     def _build_usb(self) -> QWidget:
         w = QGroupBox("USB CAMERA")
@@ -488,11 +478,8 @@ class CameraConfigWidget(QWidget):
 
     def set_camera_state(self, state: str) -> None:
         connected = state in ("CONNECTED", "STREAMING", "FINISHED", "RECONNECTING")
-        streaming = state in ("STREAMING", "RECONNECTING")
         self.btn_connect.setEnabled(not connected)
         self.btn_disconnect.setEnabled(connected or state == "LOST")
-        self.btn_start.setEnabled(not streaming)
-        self.btn_stop.setEnabled(streaming or state == "FINISHED")
         self.cmb_type.setEnabled(not connected)
         self.cmb_type.setToolTip("Ngắt kết nối camera trước khi đổi loại nguồn hình" if connected else "")
         self.cmb_mode.setEnabled(not connected)
