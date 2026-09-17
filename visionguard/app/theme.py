@@ -170,20 +170,28 @@ QFrame#AppBar QLabel[class="brand"] {{ font-size: 14pt; font-weight: 800; letter
 QFrame#AppBar QLabel[class="brandsub"] {{
     color: {COLOR_HEADER_DIM}; font-size: 8.5pt; letter-spacing: 0.3px;
 }}
+QFrame[class="gauge"] {{
+    background-color: {COLOR_HEADER_ALT};
+    border: 1px solid {COLOR_HEADER_LINE};
+    border-radius: 8px;
+}}
 QFrame#AppBar QLabel[class="meterlabel"] {{
     color: {COLOR_HEADER_DIM}; font-size: 7.5pt; font-weight: 700; letter-spacing: 1.2px;
 }}
 QFrame#AppBar QLabel[class="metervalue"] {{
     font-family: "Consolas", "Cascadia Mono", "DejaVu Sans Mono", monospace;
-    font-size: 9pt; font-weight: 700;
+    font-size: 11pt; font-weight: 700;
 }}
+QFrame#AppBar QLabel[class="metervalue"][tone="warn"] {{ color: {LED_COLORS['warn']}; }}
+QFrame#AppBar QLabel[class="metervalue"][tone="high"] {{ color: {LED_COLORS['error']}; }}
+/* The track sits on the gauge fill, so it has to be darker than it to read as a track. */
 QProgressBar[class="meter"] {{
-    background-color: {COLOR_HEADER_ALT};
+    background-color: {COLOR_HEADER};
     border: none;
-    border-radius: 3px;
+    border-radius: 2px;
 }}
 /* Green while there is headroom, amber when it is getting tight, red when it is not. */
-QProgressBar[class="meter"]::chunk {{ background-color: {LED_COLORS['ok']}; border-radius: 3px; }}
+QProgressBar[class="meter"]::chunk {{ background-color: {LED_COLORS['ok']}; border-radius: 2px; }}
 QProgressBar[class="meter"][tone="warn"]::chunk {{ background-color: {LED_COLORS['warn']}; }}
 QProgressBar[class="meter"][tone="high"]::chunk {{ background-color: {LED_COLORS['error']}; }}
 /* Monospaced digits: a proportional font makes the whole bar twitch every second. */
