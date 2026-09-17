@@ -534,6 +534,15 @@ class AppConfig:
     log_level: str = "INFO"
     events_db_path: str = "events/events.db"
     ui_fps_limit: int = 30
+    #: Begin monitoring as soon as the window is up, without anybody pressing START.
+    #: This is a machine guard on a factory floor, not a viewer: after a power cut there
+    #: is nobody standing at the PC, and a system that waits to be told to start is a
+    #: system that is not watching.
+    autostart: bool = True
+    #: Give up waiting for the model and start anyway after this long. A model that will
+    #: never load must not mean a system that never starts - the camera still streams and
+    #: the operator still sees the fault.
+    autostart_timeout_s: float = 25.0
     snapshot: SnapshotConfig = field(default_factory=SnapshotConfig)
     clip: ClipConfig = field(default_factory=ClipConfig)
     retention: RetentionConfig = field(default_factory=RetentionConfig)

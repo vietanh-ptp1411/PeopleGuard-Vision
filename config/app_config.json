@@ -7,6 +7,25 @@
     "directory": "events",
     "jpeg_quality": 90
   },
+  "clip": {
+    "enabled": false,
+    "directory": "events/clips",
+    "pre_roll_s": 2.0,
+    "post_roll_s": 2.0,
+    "max_duration_s": 120.0,
+    "fps": 0.0,
+    "scale": 0.5,
+    "retention_days": 14,
+    "max_total_gb": 20.0
+  },
+  "retention": {
+    "event_days": 90,
+    "event_max_rows": 200000,
+    "snapshot_days": 30,
+    "log_days": 30,
+    "log_dir": "logs",
+    "interval_hours": 6.0
+  },
   "visualization": {
     "color_roi_include": "#FFD400",
     "color_roi_include_occupied": "#FF3B30",
@@ -21,5 +40,7 @@
     "show_ids": true,
     "show_points": true,
     "show_labels": true
-  }
+  },
+  "autostart": true,
+  "autostart_timeout_s": 25.0
 }

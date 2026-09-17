@@ -132,6 +132,7 @@ class SystemController(QObject):
         self._in_fault = False
         self._system_msg = ""
         self._start_detection_when_loaded = False
+        self._autostart_pending = False
         self._got_data_since_start = False
         # AI camera mode
         self._event_channel = EventChannelState.DISCONNECTED
@@ -452,6 +453,46 @@ class SystemController(QObject):
 
         self.message.emit("Testing RTSP connection...")
         threading.Thread(target=_test, name="rtsp-test", daemon=True).start()
+
+    # ================================================================== autostart
+    @property
+    def model_ready(self) -> bool:
+        return self._model_loaded
+
+    def autostart(self) -> None:
+        """Begin monitoring by itself, as soon as there is any point in doing so.
+
+        The old behaviour was a flat three second timer, which is a guess in both
+        directions: too early on a cold machine where the model takes twelve seconds,
+        too late on a warm one where it is ready in two. Waiting for the model to
+        actually land removes the guess.
+
+        In AI Camera mode there is no model to wait for - the camera does the detecting -
+        so it starts straight away. And there is always a deadline: a model that will
+        never load must not mean a system that never starts, because the camera still
+        streams and the operator still needs to see the fault.
+        """
+        if self._system_running:
+            return
+        if self.ai_camera_mode or self._model_loaded:
+            log.info("Auto-start: beginning monitoring now")
+            self.start_system()
+            return
+
+        timeout = max(1.0, float(self.settings.app.autostart_timeout_s))
+        log.info("Auto-start: waiting for the model, and starting anyway in %.0fs", timeout)
+        self._autostart_pending = True
+
+        def _go(reason: str) -> None:
+            if not self._autostart_pending:
+                return
+            self._autostart_pending = False
+            log.info("Auto-start: beginning monitoring (%s)", reason)
+            self.start_system()
+
+        self.model_status.connect(
+            lambda ok, _msg: _go("model is ready") if ok else None)
+        QTimer.singleShot(int(timeout * 1000), lambda: _go(f"{timeout:.0f}s deadline"))
 
     # ================================================================== detection mode
     @property
