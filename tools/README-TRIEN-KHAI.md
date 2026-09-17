@@ -1,6 +1,60 @@
 # VisionGuard — cài đặt và chạy 24/7 trên máy khách
 
-Thư mục `tools/` chứa mọi thứ để đưa phần mềm sang một máy khác và để nó tự chạy.
+Có **hai** cách đưa phần mềm sang máy khác. Cách A là cách nên dùng.
+
+---
+
+# Cách A — Bộ cài một file (khuyên dùng)
+
+Chép **`release\VisionGuard-Setup.exe`** (377 MB) sang máy khách rồi bấm đúp. Xong.
+
+Máy khách **không cần cài Python, không cần mạng** — mọi thứ đã nằm trong file.
+
+Bộ cài sẽ:
+
+1. Hỏi thư mục cài (mặc định `C:\VisionGuard`)
+2. Giải nén — **giữ nguyên `config`, `models`, `logs`, `events` nếu đã có**, nên cài đè
+   lên một máy đã chạy sẽ không mất camera, vùng ROI hay địa chỉ PLC đã cấu hình
+3. Tạo lối tắt ở Desktop và Start Menu
+4. Đăng ký chạy tự động khi đăng nhập Windows
+5. Chạy kiểm tra hệ thống và in kết quả ra màn hình
+
+Sau khi cài:
+
+| Việc | Cách làm |
+|---|---|
+| Chạy phần mềm | `VisionGuard.exe` (hoặc lối tắt Desktop) |
+| Chạy có giám sát, tự bật lại | `VisionGuardLauncher.exe` |
+| Kiểm tra hệ thống | `VisionGuard.exe --check` |
+| Nhật ký | `logs\` |
+
+### Vì sao không cài vào Program Files
+
+Config, log, lịch sử sự kiện và clip video nằm **cạnh file exe**. Trong `Program Files`
+tài khoản người dùng thường không có quyền ghi, phần mềm sẽ chạy nhưng không lưu được gì.
+Vì vậy mặc định là `C:\VisionGuard`.
+
+### GPU
+
+Bộ cài kèm **torch bản CPU**. Lý do: bản CUDA nặng 4.4 GB so với 526 MB và vẫn đòi máy
+đích có driver NVIDIA. Đo thực tế bản CPU đạt **14–18 fps**, trong khi bộ phát hiện đã
+được giới hạn ở 12 fps — nên không thiệt gì.
+
+Máy nào thật sự cần GPU thì dùng **Cách B** với `-Gpu`.
+
+### Build lại bộ cài
+
+```
+build\venv\Scripts\python.exe build\make_installer.py
+```
+
+Mất khoảng 7 phút. Kết quả nằm ở `release\VisionGuard-Setup.exe`.
+
+---
+
+# Cách B — Cài từ mã nguồn
+
+Dùng khi máy đích cần chạy YOLO trên GPU, hoặc khi bạn muốn sửa code tại chỗ.
 
 ## 1. Cài đặt
 

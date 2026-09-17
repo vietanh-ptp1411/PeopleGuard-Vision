@@ -28,9 +28,13 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-PROJECT = Path(__file__).resolve().parent.parent
+FROZEN = bool(getattr(sys, "frozen", False))
+if FROZEN:
+    PROJECT = Path(sys.executable).resolve().parent
+else:
+    PROJECT = Path(__file__).resolve().parent.parent
+    sys.path.insert(0, str(PROJECT))
 os.chdir(PROJECT)
-sys.path.insert(0, str(PROJECT))
 
 LOG_DIR = PROJECT / "logs"
 BACKOFF_S = [5, 10, 30, 60, 120, 300]        # grows, so a permanent fault cannot spin
@@ -53,7 +57,7 @@ def setup_log() -> logging.Logger:
 
 def preflight(log: logging.Logger, wait_s: float) -> bool:
     """Retry the check while the rest of the plant is still waking up."""
-    from tools.preflight import FAIL, run
+    from visionguard.diagnostics.preflight import FAIL, run
 
     deadline = time.monotonic() + max(0.0, wait_s)
     attempt = 0
@@ -77,7 +81,10 @@ def preflight(log: logging.Logger, wait_s: float) -> bool:
 
 
 def run_app(log: logging.Logger, extra: list) -> int:
-    cmd = [sys.executable, str(PROJECT / "main.py"), "--autostart", *extra]
+    if FROZEN:
+        cmd = [str(PROJECT / "VisionGuard.exe"), "--autostart", *extra]
+    else:
+        cmd = [sys.executable, str(PROJECT / "main.py"), "--autostart", *extra]
     log.info("Starting: %s", " ".join(cmd))
     started = time.monotonic()
     try:

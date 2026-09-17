@@ -9,3 +9,11 @@ __pycache__/
 /events/
 /models/*.pt
 /config/*.tmp
+
+# Build artefacts - the bundle is ~900 MB and the installer ~380 MB
+/build/venv/
+/build/dist/
+/build/work/
+/build/staging/
+/build/payload.zip
+/release/
