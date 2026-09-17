@@ -30,6 +30,7 @@ from ...plc.plc_manager import WORD_AI_ERROR, WORD_CAMERA_ERROR, PlcOutputState
 from ...roi.roi_manager import RoiManager
 from ...roi.roi_model import RoiType
 from ...storage.event_repository import EventRepository, EventType
+from ...storage.clip_recorder import ClipRecorder, purge_old_clips
 from ...storage.snapshot_saver import SnapshotSaver
 from ...vision.yolo_detector import YoloDetector
 from ...workers.camera_event_worker import CameraEventWorker, EventChannelState
@@ -146,6 +147,8 @@ class SystemController(QObject):
         self._channel_states: Dict[int, str] = {0: EventChannelState.DISCONNECTED}
         self._last_frames: Dict[int, Frame] = {}
         self._results: Dict[int, PipelineResult] = {}
+        self.recorders: List[ClipRecorder] = []
+        purge_old_clips(self.settings.app.clip.directory, self.settings.app.clip.retention_days)
         self._build_camera_group()
 
         self._watchdog = QTimer(self)
@@ -227,6 +230,65 @@ class SystemController(QObject):
             log.info("Camera %d added to the group (%s)", index + 1, cfg.label(index))
 
         self.inference_worker.set_sources(list(zip(self.buffers, self.pipelines)))
+        self._sync_recorders()
+
+    def apply_clip_config(self, clip) -> None:
+        """Turn clip recording on or off, or retune it, without a restart."""
+        self.settings.app.clip = clip
+        self.cm.save("app")
+        self._sync_recorders()
+        purge_old_clips(clip.directory, clip.retention_days)
+        self.message.emit("Ghi video: " + ("BẬT" if clip.enabled else "TẮT"))
+
+    def clip_directory(self) -> str:
+        return self.settings.app.clip.directory
+
+    def _sync_recorders(self) -> None:
+        """One recorder per camera while recording is on, none at all while it is off.
+
+        A recorder owns a thread and a ring buffer of frames, so there is no reason to
+        carry four of them around for a feature nobody switched on.
+        """
+        cfg = self.settings.camera
+        clip = self.settings.app.clip
+        want = len(self.camera_workers) if clip.enabled else 0
+        while len(self.recorders) > want:
+            self.recorders.pop().stop()
+        while len(self.recorders) < want:
+            index = len(self.recorders)
+            self.recorders.append(ClipRecorder(index, cfg.label(index), clip))
+        for index, rec in enumerate(self.recorders):
+            rec.set_config(clip)
+            rec.set_label(cfg.label(index))
+
+    def camera_occupied(self, index: int) -> bool:
+        """Is THIS camera seeing a person - as opposed to the group as a whole."""
+        try:
+            if self.ai_camera_mode:
+                return bool(self.event_states[index].area_occupied)
+            return bool(self.pipelines[index].area_occupied)
+        except IndexError:
+            return False
+
+    def _camera_zone_label(self, index: int) -> str:
+        """Which zone tripped, for the file name."""
+        try:
+            if self.ai_camera_mode:
+                ids = self.event_states[index].occupied_zone_ids()
+            else:
+                result = self._results.get(index)
+                ids = [rid for rid, occ in (result.roi_occupied.items() if result else []) if occ]
+        except IndexError:
+            return ""
+        return ids[0] if ids else ""
+
+    def _update_recorders(self) -> None:
+        """Recording follows each camera's own zone, and only while the system runs."""
+        if not self.settings.app.clip.enabled:
+            return
+        for index, rec in enumerate(self.recorders):
+            occupied = self._system_running and self.camera_occupied(index)
+            rec.set_occupied(occupied, self._camera_zone_label(index) if occupied else "")
 
     def _wire_secondary(self, worker, events, index: int) -> None:
         """Cameras 2..N report through the same slots; the index rides along."""
@@ -652,6 +714,9 @@ class SystemController(QObject):
         except Exception:
             pass
         self._event_timer.stop()
+        for rec in self.recorders:
+            rec.stop()
+        self.recorders.clear()
         workers = (self.inference_worker, self.plc_worker, *self.camera_workers, *self.event_workers)
         for w in workers:
             w.stop_worker()
@@ -664,6 +729,8 @@ class SystemController(QObject):
     # ================================================================== worker callbacks
     def _on_frame(self, frame: Frame) -> None:
         self._last_frames[frame.camera] = frame
+        if self.settings.app.clip.enabled and frame.camera < len(self.recorders):
+            self.recorders[frame.camera].submit(frame.image, frame.timestamp)
         if frame.camera == 0:
             self._last_frame = frame      # newest picture, used for AI camera event snapshots
         self.frame_ready.emit(frame)
@@ -952,6 +1019,7 @@ class SystemController(QObject):
         if force_plc or out != self._last_output:
             self._last_output = out
             self.plc_worker.update_output(out)
+        self._update_recorders()
 
     # ================================================================== helpers
     def _log_event(self, event_type: str, roi_id: str = "", roi_name: str = "", details: str = "", snapshot_path: str = "") -> None:

@@ -472,6 +472,19 @@ class SnapshotConfig:
 
 
 @dataclass
+class ClipConfig:
+    """Video of the stretch where a person was in the zone, one file per camera."""
+    enabled: bool = False
+    directory: str = "events/clips"
+    pre_roll_s: float = 2.0        # seconds kept from BEFORE the zone tripped
+    post_roll_s: float = 3.0       # keep rolling this long after it cleared
+    max_duration_s: float = 120.0  # a stuck occupancy must not fill the disk
+    fps: float = 0.0               # 0 = measure it from the camera
+    scale: float = 0.5             # 1.0 full size; halving cuts the file and the RAM ring buffer
+    retention_days: int = 14       # 0 = keep forever
+
+
+@dataclass
 class VisualizationConfig:
     """All drawing colors live here, never in the logic layer."""
     color_roi_include: str = "#FFD400"
@@ -495,4 +508,5 @@ class AppConfig:
     events_db_path: str = "events/events.db"
     ui_fps_limit: int = 30
     snapshot: SnapshotConfig = field(default_factory=SnapshotConfig)
+    clip: ClipConfig = field(default_factory=ClipConfig)
     visualization: VisualizationConfig = field(default_factory=VisualizationConfig)
