@@ -58,6 +58,10 @@ class RoiManager:
                     return deepcopy(r)
         return None
 
+    def for_camera(self, camera: int) -> List[Roi]:
+        """Only the zones drawn on one camera of the group."""
+        return [r for r in self.all() if int(getattr(r, "camera", 0)) == int(camera)]
+
     def include_rois(self) -> List[Roi]:
         return [r for r in self.all() if r.is_include]
 
@@ -76,7 +80,8 @@ class RoiManager:
         return self._dirty
 
     # ------------------------------------------------------------------ mutations
-    def create(self, rtype: RoiType, points: Sequence[NormPoint], name: str = "", plc_device: str = "") -> Roi:
+    def create(self, rtype: RoiType, points: Sequence[NormPoint], name: str = "", plc_device: str = "",
+               camera: int = 0) -> Roi:
         with self._lock:
             rid = new_roi_id(rtype, self.ids())
             roi = Roi(
@@ -85,6 +90,7 @@ class RoiManager:
                 type=rtype,
                 points=[(float(x), float(y)) for x, y in points],
                 plc_device=plc_device.upper(),
+                camera=int(camera),
             )
             roi.clamp()
             self._rois.append(roi)

@@ -30,6 +30,10 @@ class InferenceWorker(QThread):
         self._detector = detector
         self._buffer = buffer
         self._pipeline = pipeline
+        # One model serves every camera, taken in turn: a second YOLO instance would cost
+        # another ~1 GB of VRAM to do the same work a few milliseconds later.
+        self._sources: list = [(buffer, pipeline)]
+        self._next = 0
         self._commands: "queue.Queue[Tuple[str, Any]]" = queue.Queue()
         self._running = True
         self._detecting = False
@@ -103,8 +107,9 @@ class InferenceWorker(QThread):
                 if not self._detector.is_loaded():
                     self.detection_state.emit(False, "Model not loaded")
                     return
-                self._buffer.clear()
-                self._pipeline.reset()
+                for buffer, pipeline in self._sources:
+                    buffer.clear()
+                    pipeline.reset()
                 self._errors = 0
                 self._detecting = True
                 self.detection_state.emit(True, "Detection running")
@@ -140,8 +145,24 @@ class InferenceWorker(QThread):
             self._detecting = True
             self.detection_state.emit(True, "Detection running")
 
+    def set_sources(self, sources) -> None:
+        """[(buffer, pipeline), ...] - one entry per camera being watched."""
+        self._sources = list(sources) or [(self._buffer, self._pipeline)]
+        self._next = 0
+
     def _step(self) -> None:
-        frame = self._buffer.get(timeout=0.2)
+        # Round robin so a busy camera cannot starve the others. Each camera is given one
+        # short read; nothing waiting means move straight on to the next.
+        count = len(self._sources)
+        timeout = 0.2 if count == 1 else 0.05
+        frame = None
+        pipeline = self._pipeline
+        for _ in range(count):
+            buffer, pipeline = self._sources[self._next]
+            self._next = (self._next + 1) % count
+            frame = buffer.get(timeout=timeout)
+            if frame is not None:
+                break
         if frame is None:
             return
         t0 = time.perf_counter()
@@ -157,5 +178,5 @@ class InferenceWorker(QThread):
             return
         self._errors = 0
         inference_ms = (time.perf_counter() - t0) * 1000.0
-        result = self._pipeline.process(frame, detections, inference_ms)
+        result = pipeline.process(frame, detections, inference_ms)
         self.result_ready.emit(result)

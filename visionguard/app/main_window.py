@@ -44,7 +44,8 @@ from .widgets.log_widget import LogWidget
 from .widgets.plc_config_widget import PlcConfigWidget
 from .widgets.roi_panel import RoiPanel
 from .widgets.status_panel import StatusPanel
-from .widgets.video_view import PLACEHOLDER_AI_CAMERA, PLACEHOLDER_YOLO, VideoView
+from .widgets.video_grid import VideoGrid
+from .widgets.video_view import PLACEHOLDER_AI_CAMERA, PLACEHOLDER_YOLO
 
 log = logging.getLogger("UI")
 
@@ -87,7 +88,7 @@ class MainWindow(QMainWindow):
         self._roi_states: Dict[str, OccupancyState] = {}
 
         # ---------------------------------------------------------- widgets
-        self.video = VideoView(s.app.visualization, s.app.ui_fps_limit)
+        self.video = VideoGrid(s.app.visualization, s.app.ui_fps_limit)
         self.status_panel = StatusPanel()
         self.camera_cfg = CameraConfigWidget(s.camera, self.ctrl.camera_manager.availability())
         self.ai_cfg = AIConfigWidget(s.ai)
@@ -115,6 +116,7 @@ class MainWindow(QMainWindow):
         self.btn_sim.setChecked(s.plc.simulation_mode)
         self._style_sim_button(s.plc.simulation_mode)
         self._apply_detection_mode(s.camera.detection_mode)
+        self._apply_camera_count(s.camera)
         self.lbl_source.setText(s.camera.describe_source())
         self._update_window_title()
         self._update_camera_buttons(CameraState.DISCONNECTED)
@@ -371,6 +373,8 @@ class MainWindow(QMainWindow):
         cc = self.camera_cfg
         cc.config_applied.connect(c.apply_camera_config)
         cc.config_applied.connect(lambda cfg: self.lbl_source.setText(cfg.describe_source()))
+        cc.config_applied.connect(self._apply_camera_count)
+        self.video.active_changed.connect(self._on_active_camera)
         cc.connect_requested.connect(c.camera_connect)
         cc.disconnect_requested.connect(c.camera_disconnect)
         cc.start_requested.connect(c.camera_start)
@@ -631,6 +635,22 @@ class MainWindow(QMainWindow):
         self.lbl_source.setText(self.camera_cfg.get_config().describe_source())
         self.video.set_display_mode("raw" if ai else self.video._display_mode)
         self._refresh_status()
+
+    def _apply_camera_count(self, cfg) -> None:
+        """One tile per camera, named the way the Camera tab names them."""
+        count = cfg.camera_count
+        self.video.set_count(count, [cfg.label(i) for i in range(count)])
+        self.video.set_rois(self.ctrl.roi_manager.all())
+        self._on_active_camera(self.video.active)
+
+    def _on_active_camera(self, index: int) -> None:
+        """Which camera a new zone would be drawn on."""
+        if self.video.count <= 1:
+            self.lbl_source.setText(self.ctrl.settings.camera.describe_source())
+            return
+        cfg = self.ctrl.settings.camera
+        self.lbl_source.setText(f"{cfg.label(index)} · {cfg.unit(index).describe_source()}"
+                                f"   ({self.video.count} camera)")
 
     def _update_window_title(self) -> None:
         source = "AI Camera" if self._ai_camera_mode else "PC AI / YOLO"

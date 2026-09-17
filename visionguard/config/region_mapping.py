@@ -23,6 +23,7 @@ class RegionMapping:
     name: str = ""
     plc_device: str = ""
     enabled: bool = True
+    camera: int = 0        # which camera in the group reported this region
 
     @property
     def display_name(self) -> str:
@@ -34,6 +35,7 @@ class RegionMapping:
             "name": self.name,
             "plc_device": self.plc_device,
             "enabled": bool(self.enabled),
+            "camera": int(self.camera),
         }
 
     @classmethod
@@ -43,6 +45,7 @@ class RegionMapping:
             name=str(d.get("name", "") or ""),
             plc_device=str(d.get("plc_device", "") or "").upper(),
             enabled=bool(d.get("enabled", True)),
+            camera=int(d.get("camera", 0) or 0),
         )
 
 
@@ -74,25 +77,35 @@ class RegionMappingManager:
     def enabled(self) -> List[RegionMapping]:
         return [r for r in self.all() if r.enabled]
 
-    def get(self, region_id: str) -> Optional[RegionMapping]:
-        rid = str(region_id)
+    @staticmethod
+    def key(region_id: str, camera: int = 0) -> str:
+        """Zone key for the group.
+
+        Camera 1 keeps the bare region id so existing mappings and configs stay valid;
+        the others are prefixed, because two cameras may both report "Region 1".
+        """
+        return str(region_id) if int(camera) == 0 else f"C{int(camera) + 1}:{region_id}"
+
+    def get(self, region_id: str, camera: int = 0) -> Optional[RegionMapping]:
+        rid, cam = str(region_id), int(camera)
         with self._lock:
             for r in self._regions:
-                if r.camera_region_id == rid:
+                if r.camera_region_id == rid and int(r.camera) == cam:
                     return RegionMapping(**r.__dict__)
         return None
 
-    def device_for(self, region_id: str) -> str:
-        r = self.get(region_id)
+    def device_for(self, region_id: str, camera: int = 0) -> str:
+        r = self.get(region_id, camera)
         return r.plc_device if (r and r.enabled) else ""
 
-    def name_for(self, region_id: str) -> str:
-        r = self.get(region_id)
+    def name_for(self, region_id: str, camera: int = 0) -> str:
+        r = self.get(region_id, camera)
         return r.display_name if r else f"Region {region_id}"
 
     def devices(self) -> Dict[str, str]:
-        """region id -> PLC device, for every enabled mapping that has one."""
-        return {r.camera_region_id: r.plc_device for r in self.all() if r.enabled and r.plc_device}
+        """zone key -> PLC device, for every enabled mapping that has one."""
+        return {self.key(r.camera_region_id, r.camera): r.plc_device
+                for r in self.all() if r.enabled and r.plc_device}
 
     def __len__(self) -> int:
         return len(self._regions)
@@ -101,18 +114,19 @@ class RegionMappingManager:
     def upsert(self, mapping: RegionMapping) -> None:
         with self._lock:
             for i, r in enumerate(self._regions):
-                if r.camera_region_id == mapping.camera_region_id:
+                if r.camera_region_id == mapping.camera_region_id and int(r.camera) == int(mapping.camera):
                     self._regions[i] = mapping
                     break
             else:
                 self._regions.append(mapping)
         self._notify()
 
-    def delete(self, region_id: str) -> bool:
-        rid = str(region_id)
+    def delete(self, region_id: str, camera: int = 0) -> bool:
+        rid, cam = str(region_id), int(camera)
         with self._lock:
             before = len(self._regions)
-            self._regions = [r for r in self._regions if r.camera_region_id != rid]
+            self._regions = [r for r in self._regions
+                             if not (r.camera_region_id == rid and int(r.camera) == cam)]
             removed = len(self._regions) != before
         if removed:
             self._notify()
@@ -123,12 +137,13 @@ class RegionMappingManager:
             self._regions.clear()
         self._notify()
 
-    def ensure(self, region_id: str) -> RegionMapping:
+    def ensure(self, region_id: str, camera: int = 0) -> RegionMapping:
         """Create a placeholder row the first time an unknown region id shows up."""
-        existing = self.get(region_id)
+        existing = self.get(region_id, camera)
         if existing is not None:
             return existing
-        mapping = RegionMapping(camera_region_id=str(region_id), name=f"Region {region_id}")
+        mapping = RegionMapping(camera_region_id=str(region_id), name=f"Region {region_id}",
+                                camera=int(camera))
         self.upsert(mapping)
         log.info("New camera region %s seen - add a PLC device for it in the AI Event tab", region_id)
         return mapping

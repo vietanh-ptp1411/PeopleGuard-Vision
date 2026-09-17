@@ -12,7 +12,8 @@ from PySide6.QtWidgets import (QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog
 from ...camera.base_camera import DeviceDescriptor
 from ...camera.rtsp_camera import RTSP_PRESETS, build_rtsp_url, mask_url
 from ...camera.video_camera import VIDEO_EXTENSIONS
-from ...config.schemas import CameraBrand, CameraConfig, CameraType, DetectionMode, EventProviderType
+from ...config.schemas import (MAX_CAMERAS, CameraBrand, CameraConfig, CameraType, DetectionMode,
+                               EventProviderType)
 from ..theme import COLOR_ERROR, COLOR_OK, COLOR_TEXT_DIM
 from .ai_camera_widget import AiCameraWidget
 from .form_helpers import AdvancedSection, advanced_checkbox, hint, page_header
@@ -26,6 +27,7 @@ def _btn(text: str, cls: str = "") -> QPushButton:
 
 
 class CameraConfigWidget(QWidget):
+    camera_count_changed = Signal(int)
     connect_requested = Signal()
     disconnect_requested = Signal()
     start_requested = Signal()
@@ -43,6 +45,7 @@ class CameraConfigWidget(QWidget):
         super().__init__(parent)
         self._config = deepcopy(config)
         self._availability = availability
+        self._editing = 0          # which camera of the group the form is showing
         self.advanced = AdvancedSection()
         self._build()
         self.set_config(config)
@@ -83,6 +86,24 @@ class CameraConfigWidget(QWidget):
         self.lbl_mode_hint.setProperty("class", "hint")
         lm.addRow(self.lbl_mode_hint)
         lay.addWidget(g_mode)
+
+        g_group = QGroupBox("CAMERA GROUP")
+        lg = QFormLayout(g_group)
+        self.spn_count = QSpinBox()
+        self.spn_count.setRange(1, MAX_CAMERAS)
+        self.spn_count.setSuffix(" camera")
+        self.spn_count.valueChanged.connect(self._count_changed)
+        lg.addRow("Số camera", self.spn_count)
+        self.cmb_camera = QComboBox()
+        self.cmb_camera.currentIndexChanged.connect(self._camera_selected)
+        lg.addRow("Đang cấu hình", self.cmb_camera)
+        self.edt_cam_name = QLineEdit()
+        self.edt_cam_name.setPlaceholderText("tên hiển thị trên ô hình, ví dụ Máy dập 1")
+        lg.addRow("Tên", self.edt_cam_name)
+        lg.addRow(hint("Mỗi camera canh một vùng riêng. Chỉ cần MỘT camera thấy người là bit PERSON "
+                       "bật — phần mềm OR tất cả lại thành một tín hiệu duy nhất."))
+        lay.addWidget(g_group)
+        self.g_group = g_group
 
         # type
         g_type = QGroupBox("VIDEO SOURCE (PC AI / YOLO)")
@@ -485,6 +506,16 @@ class CameraConfigWidget(QWidget):
     # ------------------------------------------------------------------ config <-> widgets
     def set_config(self, cfg: CameraConfig) -> None:
         self._config = deepcopy(cfg)
+        self._editing = 0
+        self.spn_count.blockSignals(True)
+        self.spn_count.setValue(self._config.camera_count)
+        self.spn_count.blockSignals(False)
+        self._refresh_camera_combo()
+        self._load_unit(self._config.unit(0))
+
+    def _load_unit(self, cfg: CameraConfig) -> None:
+        """Show one camera of the group in the form below."""
+        self.edt_cam_name.setText(cfg.name)
         for combo, value in ((self.cmb_mode, cfg.detection_mode), (self.cmb_brand, cfg.brand)):
             combo.blockSignals(True)
             idx = combo.findData(value)
@@ -556,8 +587,62 @@ class CameraConfigWidget(QWidget):
         r.vendor_preset = str(self.cmb_rtsp_preset.currentData())
         return r
 
+    def _refresh_camera_combo(self) -> None:
+        self.cmb_camera.blockSignals(True)
+        self.cmb_camera.clear()
+        for i in range(self._config.camera_count):
+            self.cmb_camera.addItem(self._config.label(i), i)
+        self.cmb_camera.setCurrentIndex(min(self._editing, self.cmb_camera.count() - 1))
+        self.cmb_camera.blockSignals(False)
+        multi = self._config.camera_count > 1
+        self.cmb_camera.setEnabled(multi)
+        self.edt_cam_name.setEnabled(True)
+
+    def _camera_selected(self, index: int) -> None:
+        if index < 0 or index == self._editing:
+            return
+        self._store_unit()
+        self._editing = index
+        self._load_unit(self._config.unit(index))
+
+    def _count_changed(self, value: int) -> None:
+        """Adding or removing a camera takes effect straight away: the grid follows."""
+        self._store_unit()
+        self._config.set_count(value)
+        if self._editing >= self._config.camera_count:
+            self._editing = 0
+            self._load_unit(self._config.unit(0))
+        self._refresh_camera_combo()
+        self._apply()
+
+    def _store_unit(self) -> None:
+        """Fold the form back into whichever camera it is currently editing."""
+        unit = self._form_unit()
+        cfg = self._config
+        cfg.detection_mode = unit.detection_mode
+        cfg.brand = unit.brand
+        cfg.reconnect = unit.reconnect
+        target = cfg if self._editing == 0 else cfg._extra(self._editing)
+        target.name = unit.name
+        target.camera_type = unit.camera_type
+        target.ai_camera = unit.ai_camera
+        target.usb = unit.usb
+        target.video = unit.video
+        target.rtsp = unit.rtsp
+        target.industrial = unit.industrial
+        if self._editing == 0:
+            self.cmb_camera.setItemText(0, cfg.label(0))
+        else:
+            self.cmb_camera.setItemText(self._editing, cfg.label(self._editing))
+
     def get_config(self) -> CameraConfig:
+        self._store_unit()
+        return deepcopy(self._config)
+
+    def _form_unit(self) -> CameraConfig:
+        """A standalone CameraConfig built from whatever the form currently shows."""
         cfg = deepcopy(self._config)
+        cfg.name = self.edt_cam_name.text().strip()
         cfg.detection_mode = self.current_mode().value
         cfg.brand = self.current_brand().value
         cfg.ai_camera = self.page_ai.get_config()

@@ -136,6 +136,17 @@ class SystemController(QObject):
         self._last_frame: Optional[Frame] = None
         self._zone_states: Dict[str, ZoneState] = {}
         self._area_was_occupied = False
+        # --- the camera group (index 0 is the primary camera created above)
+        self.buffers = [self.buffer]
+        self.pipelines = [self.pipeline]
+        self.camera_workers = [self.camera_worker]
+        self.event_workers = [self.event_worker]
+        self.event_states = [self.event_state]
+        self._camera_states: Dict[int, str] = {0: CameraState.DISCONNECTED}
+        self._channel_states: Dict[int, str] = {0: EventChannelState.DISCONNECTED}
+        self._last_frames: Dict[int, Frame] = {}
+        self._results: Dict[int, PipelineResult] = {}
+        self._build_camera_group()
 
         self._watchdog = QTimer(self)
         self._watchdog.setInterval(500)
@@ -146,21 +157,131 @@ class SystemController(QObject):
         self._event_timer.setInterval(EVENT_TICK_MS)
         self._event_timer.timeout.connect(self._tick_events)
 
-        for w in (self.camera_worker, self.inference_worker, self.event_worker, self.plc_worker):
-            w.start()
+        for w in [self.inference_worker, self.plc_worker, *self.camera_workers, *self.event_workers]:
+            if not w.isRunning():
+                w.start()
 
         if self.ai_camera_mode:
             log.info("Detection mode: AI Camera (%s) - YOLO stays available but idle",
                      self.settings.camera.brand_enum.label)
             self._event_timer.start()
-            self.event_worker.request_connect()
+            for ev in self.event_workers:
+                ev.request_connect()
         else:
             log.info("Detection mode: PC AI / YOLO")
-            self.event_worker.request_disable()
+            for ev in self.event_workers:
+                ev.request_disable()
             if self.settings.ai.detector.auto_load_on_start:
                 self.load_model()
         if self.settings.plc.simulation_mode:
             self.plc_connect()   # harmless: virtual PLC
+
+    # ================================================================== camera group
+    @property
+    def camera_count(self) -> int:
+        return len(self.camera_workers)
+
+    def _build_camera_group(self) -> None:
+        """Bring the number of live cameras in line with the configuration.
+
+        Camera 1 is never rebuilt - it is the one the rest of the controller talks to
+        directly. Cameras 2..N are created and torn down here.
+        """
+        cfg = self.settings.camera
+        want = cfg.camera_count
+
+        while len(self.camera_workers) > want:
+            index = len(self.camera_workers) - 1
+            worker = self.camera_workers.pop()
+            events = self.event_workers.pop()
+            self.pipelines.pop()
+            self.buffers.pop()
+            self.event_states.pop()
+            self._camera_states.pop(index, None)
+            self._channel_states.pop(index, None)
+            self._last_frames.pop(index, None)
+            self._results.pop(index, None)
+            for w in (worker, events):
+                w.stop_worker()
+            for w in (worker, events):
+                w.wait(1500)
+            log.info("Camera %d removed from the group", index + 1)
+
+        while len(self.camera_workers) < want:
+            index = len(self.camera_workers)
+            unit = cfg.unit(index)
+            buffer = LatestFrameBuffer()
+            pipeline = ProcessingPipeline(self.roi_manager, self.settings.ai.logic, camera=index)
+            worker = CameraWorker(CameraManager(), buffer, unit, index=index)
+            events = CameraEventWorker(EventManager(), unit.ai_camera, unit.brand_enum)
+            self.buffers.append(buffer)
+            self.pipelines.append(pipeline)
+            self.camera_workers.append(worker)
+            self.event_workers.append(events)
+            self.event_states.append(CameraEventStateMachine(unit.ai_camera.logic))
+            self._camera_states[index] = CameraState.DISCONNECTED
+            self._channel_states[index] = EventChannelState.DISCONNECTED
+            self._wire_secondary(worker, events, index)
+            worker.start()
+            events.start()
+            log.info("Camera %d added to the group (%s)", index + 1, cfg.label(index))
+
+        self.inference_worker.set_sources(list(zip(self.buffers, self.pipelines)))
+
+    def _wire_secondary(self, worker, events, index: int) -> None:
+        """Cameras 2..N report through the same slots; the index rides along."""
+        worker.frame_ready.connect(self._on_frame)
+        worker.state_changed.connect(lambda st, msg, i=index: self._on_secondary_camera_state(i, st, msg))
+        events.event_received.connect(lambda ev, i=index: self._on_camera_event(ev, i))
+        events.state_changed.connect(lambda st, msg, i=index: self._on_secondary_channel_state(i, st, msg))
+        events.raw_event.connect(self.raw_camera_event)
+
+    def _on_secondary_camera_state(self, index: int, state: str, msg: str) -> None:
+        if state in ("TEST_OK", "TEST_FAIL"):
+            self.message.emit(f"{self.settings.camera.label(index)}: {msg}")
+            return
+        previous = self._camera_states.get(index)
+        self._camera_states[index] = state
+        if state != previous:
+            log.info("%s: %s%s", self.settings.camera.label(index), state, f" ({msg})" if msg else "")
+        if state in (CameraState.LOST, CameraState.ERROR) and previous == CameraState.STREAMING:
+            self._log_event(EventType.CAMERA, details=f"{self.settings.camera.label(index)} lost: {msg}")
+            self.buffers[index].clear()
+        self._recompute()
+
+    def _on_secondary_channel_state(self, index: int, state: str, msg: str) -> None:
+        self._channel_states[index] = state
+        self._recompute()
+
+    def group_occupied(self) -> bool:
+        """Any camera seeing a person occupies the area - one bit for the whole group."""
+        if self.ai_camera_mode:
+            return any(sm.area_occupied for sm in self.event_states)
+        return any(p.area_occupied for p in self.pipelines)
+
+    def _sync_group_area(self) -> None:
+        """Log AREA OCCUPIED / AREA CLEAR once for the group, not once per camera."""
+        occupied = self.group_occupied()
+        if occupied == self._area_was_occupied:
+            return
+        self._area_was_occupied = occupied
+        if occupied:
+            log.info("AREA OCCUPIED")
+            self._log_event(EventType.AREA_OCCUPIED, details=self._occupied_detail())
+        else:
+            log.info("AREA CLEAR")
+            self._log_event(EventType.AREA_CLEAR)
+
+    def _occupied_detail(self) -> str:
+        if self.ai_camera_mode:
+            parts = []
+            for i, sm in enumerate(self.event_states):
+                ids = sm.occupied_zone_ids()
+                if ids:
+                    parts.append(f"{self.settings.camera.label(i)}: {', '.join(ids)}")
+            return "; ".join(parts) or "camera event"
+        total = sum(r.evaluation.in_roi for r in self._results.values())
+        return f"{total} person(s) in ROI"
 
     # ================================================================== wiring
     def _wire_workers(self) -> None:
@@ -195,30 +316,39 @@ class SystemController(QObject):
         previous_mode = self.settings.camera.mode_enum
         self.settings.camera = cfg
         self.cm.save("camera")
-        self.camera_worker.set_config(cfg)
-        self.event_state.set_config(cfg.ai_camera.logic)
+        self._build_camera_group()
+        for index, worker in enumerate(self.camera_workers):
+            worker.set_config(cfg.unit(index))
+        for index, machine in enumerate(self.event_states):
+            machine.set_config(cfg.unit(index).ai_camera.logic)
         if cfg.is_ai_camera:
-            self.event_worker.set_config(cfg.ai_camera, cfg.brand_enum)
+            for index, ev in enumerate(self.event_workers):
+                ev.set_config(cfg.unit(index).ai_camera, cfg.brand_enum)
             if not self._event_timer.isActive():
                 self._event_timer.start()
         else:
             self._event_timer.stop()
-            self.event_worker.request_disable()
+            for ev in self.event_workers:
+                ev.request_disable()
         if cfg.mode_enum != previous_mode:
             self.detection_mode_changed.emit(cfg.detection_mode)
         self.message.emit("Camera configuration saved")
 
     def camera_connect(self) -> None:
-        self.camera_worker.request_connect()
+        for w in self.camera_workers:
+            w.request_connect()
 
     def camera_disconnect(self) -> None:
-        self.camera_worker.request_disconnect()
+        for w in self.camera_workers:
+            w.request_disconnect()
 
     def camera_start(self) -> None:
-        self.camera_worker.request_start()
+        for w in self.camera_workers:
+            w.request_start()
 
     def camera_stop(self) -> None:
-        self.camera_worker.request_stop()
+        for w in self.camera_workers:
+            w.request_stop()
 
     def camera_test(self) -> None:
         self.camera_worker.request_test()
@@ -266,16 +396,20 @@ class SystemController(QObject):
             self.stop_system()
         self.settings.camera.detection_mode = mode.value
         self.cm.save("camera")
-        self.camera_worker.set_config(self.settings.camera)
+        cfg = self.settings.camera
+        for index, worker in enumerate(self.camera_workers):
+            worker.set_config(cfg.unit(index))
         if mode == DetectionMode.AI_CAMERA:
             self.inference_worker.stop_detection()
-            self.event_state.reset()
-            self.event_worker.set_config(self.settings.camera.ai_camera, self.settings.camera.brand_enum)
-            self.event_worker.request_connect()
+            for index, machine in enumerate(self.event_states):
+                machine.reset()
+                self.event_workers[index].set_config(cfg.unit(index).ai_camera, cfg.brand_enum)
+                self.event_workers[index].request_connect()
             self._event_timer.start()
         else:
             self._event_timer.stop()
-            self.event_worker.request_disable()
+            for ev in self.event_workers:
+                ev.request_disable()
         log.info("Detection mode changed to %s", mode.label)
         self.message.emit(f"Detection mode: {mode.label}")
         self.detection_mode_changed.emit(mode.value)
@@ -298,8 +432,10 @@ class SystemController(QObject):
         self.message.emit(f"Listening to the camera event channel for {seconds:.0f}s...")
         self.event_worker.request_test_event(seconds)
 
-    def simulate_event(self, action: str, region_id: str = "1") -> None:
-        self.event_worker.simulate(action, region_id)
+    def simulate_event(self, action: str, region_id: str = "1", camera: int = 0) -> None:
+        """Mock provider only: inject an event as if `camera` had reported it."""
+        if 0 <= camera < len(self.event_workers):
+            self.event_workers[camera].simulate(action, region_id)
 
     def camera_events(self, limit: int = EVENT_HISTORY) -> List[CameraEvent]:
         return self._event_history[-limit:]
@@ -321,14 +457,17 @@ class SystemController(QObject):
         self.message.emit("Region mapping saved" if ok else "Region mapping save FAILED (see log)")
         return ok
 
-    def update_region(self, region_id: str, name: str, plc_device: str, enabled: bool) -> None:
+    def update_region(self, region_id: str, name: str, plc_device: str, enabled: bool,
+                      camera: int = 0) -> None:
         self.region_mapping.upsert(RegionMapping(camera_region_id=str(region_id), name=name,
-                                                 plc_device=plc_device.upper(), enabled=enabled))
+                                                 plc_device=plc_device.upper(), enabled=enabled,
+                                                 camera=int(camera)))
         self.message.emit(f"Region {region_id} updated")
 
-    def delete_region(self, region_id: str) -> None:
-        if self.region_mapping.delete(region_id):
-            self.event_state.forget_zone(region_id)
+    def delete_region(self, region_id: str, camera: int = 0) -> None:
+        if self.region_mapping.delete(region_id, camera):
+            if 0 <= camera < len(self.event_states):
+                self.event_states[camera].forget_zone(region_id)
             self.message.emit(f"Region {region_id} removed")
 
     def _on_regions_changed(self) -> None:
@@ -401,9 +540,9 @@ class SystemController(QObject):
         self.plc_worker.manual_read(device)
 
     # ================================================================== ROI slots
-    def add_roi(self, type_value: str, points: List) -> None:
+    def add_roi(self, type_value: str, points: List, camera: int = 0) -> None:
         rtype = RoiType(type_value)
-        roi = self.roi_manager.create(rtype, points)
+        roi = self.roi_manager.create(rtype, points, camera=camera)
         self.message.emit(f"{rtype.label} ROI {roi.id} created ({len(points)} points) - remember to Save ROI")
 
     def update_roi_points(self, roi_id: str, points: List) -> None:
@@ -505,7 +644,7 @@ class SystemController(QObject):
         except Exception:
             pass
         self._event_timer.stop()
-        workers = (self.inference_worker, self.camera_worker, self.event_worker, self.plc_worker)
+        workers = (self.inference_worker, self.plc_worker, *self.camera_workers, *self.event_workers)
         for w in workers:
             w.stop_worker()
         for w in workers:
@@ -516,7 +655,9 @@ class SystemController(QObject):
 
     # ================================================================== worker callbacks
     def _on_frame(self, frame: Frame) -> None:
-        self._last_frame = frame          # newest picture, used for AI camera event snapshots
+        self._last_frames[frame.camera] = frame
+        if frame.camera == 0:
+            self._last_frame = frame      # newest picture, used for AI camera event snapshots
         self.frame_ready.emit(frame)
 
     def _on_camera_state(self, state: str, msg: str) -> None:
@@ -526,6 +667,7 @@ class SystemController(QObject):
             return
         prev = self._camera_state
         self._camera_state = state
+        self._camera_states[0] = state      # camera 1's slot in the group table
         self.camera_state.emit(state, msg)
         if state == CameraState.STREAMING and prev != CameraState.STREAMING:
             self._log_event(EventType.CAMERA, details="Camera streaming")
@@ -535,20 +677,16 @@ class SystemController(QObject):
         self._recompute()
 
     def _on_result(self, result: PipelineResult) -> None:
-        self._last_result = result
+        self._results[result.camera] = result
+        if result.camera == 0:
+            self._last_result = result
         self._last_result_time = time.monotonic()
         if self._ai_error:
             self._ai_error = ""
         roi_names = {r.id: r.name for r in result.rois}
         for t in result.transitions:
             if t.roi_id == OccupancyTracker.GLOBAL_ID:
-                if t.became_occupied:
-                    log.info("AREA OCCUPIED")
-                    self._log_event(EventType.AREA_OCCUPIED, details=f"{result.evaluation.in_roi} person(s) in ROI")
-                elif t.became_clear:
-                    log.info("AREA CLEAR")
-                    self._log_event(EventType.AREA_CLEAR)
-                continue
+                continue      # the group's area is the OR of every camera, synced below
             name = roi_names.get(t.roi_id, t.roi_id)
             if t.became_occupied:
                 logging.getLogger("ROI").info("Person entered %s (%s)", name, t.roi_id)
@@ -557,6 +695,7 @@ class SystemController(QObject):
             elif t.became_clear:
                 logging.getLogger("ROI").info("Person left %s (%s)", name, t.roi_id)
                 self._log_event(EventType.PERSON_LEFT, t.roi_id, name)
+        self._sync_group_area()
         self.result_ready.emit(result)
         self._recompute()
 
@@ -588,8 +727,9 @@ class SystemController(QObject):
         self._log_event(EventType.AI, details=f"Inference error: {msg}")
         self._recompute()
 
-    def _on_camera_event(self, event: CameraEvent) -> None:
-        """An alarm arrived from the camera (AI Camera mode)."""
+    def _on_camera_event(self, event: CameraEvent, camera: int = 0) -> None:
+        """An alarm arrived from one camera of the group (AI Camera mode)."""
+        event.raw_data = {**(event.raw_data or {}), "cameraIndex": camera}
         self._event_history.append(event)
         if len(self._event_history) > EVENT_HISTORY:
             del self._event_history[: len(self._event_history) - EVENT_HISTORY]
@@ -601,16 +741,17 @@ class SystemController(QObject):
             self._log_event(EventType.CAMERA, details=event.summary())
             return
         if event.region_id:
-            self.region_mapping.ensure(event.region_id)
+            self.region_mapping.ensure(event.region_id, camera)
         if event.is_non_human_target:
             log.info("Camera event ignored (%s is not a person): %s", event.target_enum.value, event.summary())
             return
-        self.event_state.handle_event(event)
+        self.event_states[camera].handle_event(event)
         self._tick_events()
 
     def _on_event_channel_state(self, state: str, msg: str) -> None:
         previous = self._event_channel
         self._event_channel = state
+        self._channel_states[0] = state
         self._event_message = msg
         self.event_channel_state.emit(state, msg)
         if state == EventChannelState.ONLINE and previous != EventChannelState.ONLINE:
@@ -625,35 +766,33 @@ class SystemController(QObject):
         self.message.emit(message)
 
     def _tick_events(self) -> None:
-        """Advance the event debounce timers and publish whatever changed."""
+        """Advance every camera's debounce timers and publish whatever changed."""
         if not self.ai_camera_mode:
             return
-        transitions = self.event_state.tick()
-        states = self.event_state.zone_states()
+        key = self.region_mapping.key
+        transitions = []                       # (camera index, transition)
+        states = {}
+        for index, machine in enumerate(self.event_states):
+            transitions.extend((index, tr) for tr in machine.tick())
+            for rid, st in machine.zone_states().items():
+                states[key(rid, index)] = st
         if states != self._zone_states:
             self._zone_states = states
             self.zone_states_changed.emit(dict(states))
-        for tr in transitions:
-            name = self.region_mapping.name_for(tr.region_id)
+        for index, tr in transitions:
+            name = self.region_mapping.name_for(tr.region_id, index)
+            zone_id = key(tr.region_id, index)
+            frame = self._last_frames.get(index)
             if tr.occupied:
-                logging.getLogger("ROI").info("Person entered %s (region %s)", name, tr.region_id)
-                snap = (self.snapshots.save(self._last_frame.image, f"REGION_{tr.region_id}", "PERSON")
-                        if (self._system_running and self._last_frame is not None) else None)
-                self._log_event(EventType.PERSON_ENTERED, tr.region_id, name,
+                logging.getLogger("ROI").info("Person entered %s (region %s)", name, zone_id)
+                snap = (self.snapshots.save(frame.image, f"REGION_{zone_id}", "PERSON")
+                        if (self._system_running and frame is not None) else None)
+                self._log_event(EventType.PERSON_ENTERED, zone_id, name,
                                 snapshot_path=str(snap) if snap else "")
             else:
-                logging.getLogger("ROI").info("Zone clear: %s (region %s)", name, tr.region_id)
-                self._log_event(EventType.PERSON_LEFT, tr.region_id, name)
-        occupied = self.event_state.area_occupied
-        if occupied != self._area_was_occupied:
-            self._area_was_occupied = occupied
-            if occupied:
-                log.info("AREA OCCUPIED (camera AI)")
-                self._log_event(EventType.AREA_OCCUPIED,
-                                details=", ".join(self.event_state.occupied_zone_ids()) or "camera event")
-            else:
-                log.info("AREA CLEAR (camera AI)")
-                self._log_event(EventType.AREA_CLEAR)
+                logging.getLogger("ROI").info("Zone clear: %s (region %s)", name, zone_id)
+                self._log_event(EventType.PERSON_LEFT, zone_id, name)
+        self._sync_group_area()
         self._recompute()
 
     def _on_plc_connection(self, connected: bool, msg: str) -> None:
@@ -689,7 +828,7 @@ class SystemController(QObject):
         running = self._system_running
         ai_mode = self.ai_camera_mode
         logic = self.settings.camera.ai_camera.logic
-        video_ok = self._camera_state == CameraState.STREAMING
+        video_ok = all(st == CameraState.STREAMING for st in self._camera_states.values())
 
         if ai_mode:
             # The camera detects; the event channel is what must be alive. Once it is online,
@@ -701,14 +840,14 @@ class SystemController(QObject):
             simulated = self.settings.camera.ai_camera.provider_enum == EventProviderType.MOCK
             video_matters = bool(logic.fault_on_video_loss) and not simulated
             detector_matters = bool(logic.fault_on_event_loss)
-            area_occupied = self.event_state.area_occupied
+            area_occupied = self.group_occupied()
         else:
             detector_ok = self._model_loaded and self._detecting and not self._ai_error
             has_data = self._last_result is not None
             detector_reason = self._ai_error or "AI not running"
             video_matters = True
             detector_matters = True
-            area_occupied = bool(self._last_result.area_occupied) if self._last_result else False
+            area_occupied = self.group_occupied()
         camera_ok = video_ok
 
         fault, code, reason = False, 0, ""
@@ -782,11 +921,15 @@ class SystemController(QObject):
         if running and area == "STARTING" and not fault:
             return
         if ai_mode:
-            zone_occupied = self.event_state.zone_occupied()
+            zone_occupied = {}
+            for index, machine in enumerate(self.event_states):
+                for rid, occ in machine.zone_occupied().items():
+                    zone_occupied[self.region_mapping.key(rid, index)] = occ
             zone_devices = self.region_mapping.devices()
         else:
-            last = self._last_result
-            zone_occupied = dict(last.roi_occupied) if last else {}
+            zone_occupied = {}
+            for res in self._results.values():
+                zone_occupied.update(res.roi_occupied)
             zone_devices = {r.id: r.plc_device for r in self.roi_manager.include_rois() if r.plc_device}
         out = PlcOutputState(
             running=running,
