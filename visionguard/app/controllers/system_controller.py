@@ -30,7 +30,8 @@ from ...plc.plc_manager import WORD_AI_ERROR, WORD_CAMERA_ERROR, PlcOutputState
 from ...roi.roi_manager import RoiManager
 from ...roi.roi_model import RoiType
 from ...storage.event_repository import EventRepository, EventType
-from ...storage.clip_recorder import ClipRecorder, purge_old_clips
+from ...storage import housekeeping
+from ...storage.clip_recorder import ClipRecorder
 from ...storage.snapshot_saver import SnapshotSaver
 from ...vision.yolo_detector import YoloDetector
 from ...workers.camera_event_worker import CameraEventWorker, EventChannelState
@@ -148,13 +149,20 @@ class SystemController(QObject):
         self._last_frames: Dict[int, Frame] = {}
         self._results: Dict[int, PipelineResult] = {}
         self.recorders: List[ClipRecorder] = []
-        purge_old_clips(self.settings.app.clip.directory, self.settings.app.clip.retention_days)
         self._build_camera_group()
 
         self._watchdog = QTimer(self)
         self._watchdog.setInterval(500)
         self._watchdog.timeout.connect(self._tick)
         self._watchdog.start()
+
+        housekeeping.run_in_background(self.settings.app, self.events)
+        self._housekeeping = QTimer(self)
+        self._housekeeping.setInterval(
+            int(max(0.25, self.settings.app.retention.interval_hours) * 3600_000))
+        self._housekeeping.timeout.connect(
+            lambda: housekeeping.run_in_background(self.settings.app, self.events))
+        self._housekeeping.start()
 
         self._event_timer = QTimer(self)
         self._event_timer.setInterval(EVENT_TICK_MS)
@@ -230,6 +238,7 @@ class SystemController(QObject):
             log.info("Camera %d added to the group (%s)", index + 1, cfg.label(index))
 
         self.inference_worker.set_sources(list(zip(self.buffers, self.pipelines)))
+        self.inference_worker.set_max_fps(self.settings.ai.detector.max_fps)
         self._sync_recorders()
 
     def apply_clip_config(self, clip) -> None:
@@ -237,7 +246,7 @@ class SystemController(QObject):
         self.settings.app.clip = clip
         self.cm.save("app")
         self._sync_recorders()
-        purge_old_clips(clip.directory, clip.retention_days)
+        housekeeping.run_in_background(self.settings.app, self.events)
         self.message.emit("Ghi video: " + ("BẬT" if clip.enabled else "TẮT"))
 
     def clip_directory(self) -> str:
@@ -541,7 +550,9 @@ class SystemController(QObject):
         old = self.settings.ai.detector
         self.settings.ai = cfg
         self.cm.save("ai")
-        self.pipeline.set_logic(cfg.logic)
+        for pipeline in self.pipelines:
+            pipeline.set_logic(cfg.logic)
+        self.inference_worker.set_max_fps(cfg.detector.max_fps)
         new = cfg.detector
         if self._model_loaded:
             reload_needed = (old.model_path, old.device, old.imgsz, old.tracking_enabled, old.half) != (
@@ -706,6 +717,7 @@ class SystemController(QObject):
     def shutdown(self) -> None:
         log.info("Shutting down")
         self._watchdog.stop()
+        self._housekeeping.stop()
         try:
             if self._system_running:
                 self._system_running = False

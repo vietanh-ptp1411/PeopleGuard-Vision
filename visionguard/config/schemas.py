@@ -377,6 +377,7 @@ class DetectorConfig:
     iou: float = 0.50
     device: str = "auto"        # auto | cpu | cuda | cuda:0
     imgsz: int = 640
+    max_fps: float = 12.0       # inferences per second PER CAMERA; 0 = as fast as it can
     classes: List[int] = field(default_factory=lambda: [0])  # COCO person
     max_det: int = 50
     half: bool = False
@@ -482,6 +483,18 @@ class ClipConfig:
     fps: float = 0.0               # 0 = measure it from the camera
     scale: float = 0.5             # 1.0 full size; halving cuts the file and the RAM ring buffer
     retention_days: int = 14       # 0 = keep forever
+    max_total_gb: float = 20.0     # hard cap on the whole clips folder; 0 = no cap
+
+
+@dataclass
+class RetentionConfig:
+    """How long the things this system writes are kept. 0 disables a rule."""
+    event_days: int = 90           # rows in the SQLite history
+    event_max_rows: int = 200000   # hard cap regardless of age
+    snapshot_days: int = 30
+    log_days: int = 30
+    log_dir: str = "logs"
+    interval_hours: float = 6.0    # how often housekeeping runs while the app is up
 
 
 @dataclass
@@ -509,4 +522,5 @@ class AppConfig:
     ui_fps_limit: int = 30
     snapshot: SnapshotConfig = field(default_factory=SnapshotConfig)
     clip: ClipConfig = field(default_factory=ClipConfig)
+    retention: RetentionConfig = field(default_factory=RetentionConfig)
     visualization: VisualizationConfig = field(default_factory=VisualizationConfig)
