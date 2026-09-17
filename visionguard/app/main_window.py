@@ -127,6 +127,11 @@ class MainWindow(QMainWindow):
         clock.timeout.connect(self._update_clock)
         clock.start(1000)
         self._update_clock()
+        # Resources on their own, slower timer: sampled every second the numbers flicker
+        # too much to read, and two seconds is plenty to notice a machine in trouble.
+        self._meter_timer = QTimer(self)
+        self._meter_timer.timeout.connect(self.appbar.refresh_resources)
+        self._meter_timer.start(2000)
         return self.appbar
 
     def _build_command_bar(self) -> QWidget:
@@ -175,8 +180,9 @@ class MainWindow(QMainWindow):
         self.addActions([act_start, act_stop, act_full])
 
     def _style_sim_button(self, on: bool) -> None:
+        # The PLC chip in the status row already says "Mô phỏng (PLC ảo)"; the app bar
+        # used to repeat it in a second vocabulary, which is what made the bar look busy.
         self.btn_sim.setText("PLC SIM: ON" if on else "PLC SIM")
-        self.appbar.set_simulation(on)
 
     # ================================================================== layout
     def _build_layout(self) -> None:
@@ -568,8 +574,6 @@ class MainWindow(QMainWindow):
         self._ai_camera_mode = ai
         self.status_panel.set_ai_camera_mode(ai)
         self.video.set_placeholder(PLACEHOLDER_AI_CAMERA if ai else PLACEHOLDER_YOLO)
-        self.appbar.set_mode("AI CAMERA" if ai else "PC AI · YOLO")
-        self._update_window_title()
         self.tabs.setTabVisible(TAB_EVENT, ai)
         self.tabs.setTabVisible(TAB_AI, not ai)
         self.tabs.setTabVisible(TAB_ROI, not ai)
@@ -602,8 +606,9 @@ class MainWindow(QMainWindow):
                                 f"   ({self.video.count} camera)")
 
     def _update_window_title(self) -> None:
-        source = "AI Camera" if self._ai_camera_mode else "PC AI / YOLO"
-        self.setWindowTitle(f"VisionGuard - Person-in-Area Monitoring - {source} -> Mitsubishi PLC")
+        # Just the name. The old title spelled out the subtitle, the detection mode and
+        # the PLC brand, all three of which the window itself shows a few pixels lower.
+        self.setWindowTitle("VisionGuard")
 
     def _mode_selected_in_tab(self, mode_value: str) -> None:
         """The Camera tab combo changed: apply it straight away so the UI follows."""
@@ -795,6 +800,8 @@ class MainWindow(QMainWindow):
                 event.ignore()
                 return
             self.ctrl.stop_system()
+        # Nothing should still be sampling the process while it is being torn down.
+        self._meter_timer.stop()
         try:
             self.ctrl.settings.camera = self.camera_cfg.get_config()
             self.ctrl.settings.ai = self.ai_cfg.get_config()

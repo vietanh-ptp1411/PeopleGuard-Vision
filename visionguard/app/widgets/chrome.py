@@ -12,9 +12,15 @@ instead of five boxes, and silent while everything is healthy.
 """
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QSize, Qt, Signal
 from PySide6.QtGui import QFontMetrics, QGuiApplication, QMouseEvent, QPixmap
-from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QPushButton, QSizePolicy, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (QFrame, QGridLayout, QHBoxLayout, QLabel, QProgressBar, QPushButton,
+                               QSizePolicy, QVBoxLayout, QWidget)
+
+try:
+    import psutil
+except ImportError:                      # ships with ultralytics, but never assume it
+    psutil = None
 
 from ...utils.paths import asset_path
 from ..theme import (COLOR_BORDER, COLOR_ERROR, COLOR_ERROR_SOFT, COLOR_HEADER_DIM, COLOR_TEXT_DIM,
@@ -88,54 +94,149 @@ def _divider() -> QFrame:
     return line
 
 
-class AppBar(QFrame):
-    """Dark identity bar: who made it, what it is, and what state it is in.
+class ResourceMeter(QFrame):
+    """What VisionGuard is costing this machine: CPU and memory, as two small bars.
 
-    Three groups rather than five floating pieces - company mark and product name on
-    the left, detection mode and clock on the right, and the gap between them left
-    empty. The simulation badge sits in amber because it is a warning, not a label.
+    These are the *process* figures, not the machine's. They are the numbers an operator
+    can act on, and the ones the 12 fps detector cap was tuned against - a busy machine
+    with an idle VisionGuard is somebody else's problem. The whole-machine load is in
+    the tooltip for when that question does come up.
+    """
+
+    WARN_AT = 60.0
+    HIGH_AT = 85.0
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setProperty("class", "transparent")
+        grid = QGridLayout(self)
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setHorizontalSpacing(8)
+        grid.setVerticalSpacing(4)
+        self.bar_cpu, self.val_cpu = self._row(grid, 0, "CPU")
+        self.bar_ram, self.val_ram = self._row(grid, 1, "RAM")
+
+        self._process = psutil.Process() if psutil is not None else None
+        self._cores = float(psutil.cpu_count() or 1) if psutil is not None else 1.0
+        if self._process is not None:
+            # cpu_percent reports usage *since the previous call*, so the first one only
+            # starts the clock. Without this the bar's first reading is a meaningless 0.
+            self._process.cpu_percent(None)
+        else:
+            for label in (self.val_cpu, self.val_ram):
+                label.setText("n/a")
+            self.setToolTip("psutil chưa được cài - không đo được CPU/RAM")
+
+    def _row(self, grid: QGridLayout, row: int, caption: str) -> tuple[QProgressBar, QLabel]:
+        label = QLabel(caption)
+        label.setProperty("class", "meterlabel")
+        bar = QProgressBar()
+        bar.setProperty("class", "meter")
+        bar.setProperty("tone", "ok")
+        bar.setRange(0, 100)
+        bar.setValue(0)
+        bar.setTextVisible(False)
+        bar.setFixedSize(72, 7)
+        value = QLabel("-")
+        value.setProperty("class", "metervalue")
+        value.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        value.setFixedWidth(52)
+        middle = Qt.AlignmentFlag.AlignVCenter
+        grid.addWidget(label, row, 0, middle)
+        grid.addWidget(bar, row, 1, middle)
+        grid.addWidget(value, row, 2, middle)
+        return bar, value
+
+    def refresh(self) -> None:
+        if self._process is None:
+            return
+        try:
+            cpu = self._process.cpu_percent(None) / self._cores
+            rss_gb = self._process.memory_info().rss / 1e9
+            memory = psutil.virtual_memory()
+        except Exception:
+            return                      # a sampling hiccup must never take the UI with it
+        total_gb = memory.total / 1e9
+        self._apply(self.bar_cpu, self.val_cpu, cpu, f"{cpu:.0f}%")
+        self._apply(self.bar_ram, self.val_ram, rss_gb / total_gb * 100.0 if total_gb else 0.0,
+                    f"{rss_gb:.1f} GB")
+        self.setToolTip(f"VisionGuard: {cpu:.0f}% CPU, {rss_gb:.2f} GB\n"
+                        f"Toàn máy: {psutil.cpu_percent(None):.0f}% CPU, "
+                        f"{memory.percent:.0f}% RAM ({total_gb:.1f} GB tổng)")
+
+    def _apply(self, bar: QProgressBar, label: QLabel, percent: float, text: str) -> None:
+        bar.setValue(int(round(max(0.0, min(100.0, percent)))))
+        label.setText(text)
+        tone = "ok" if percent < self.WARN_AT else ("warn" if percent < self.HIGH_AT else "high")
+        if bar.property("tone") != tone:
+            # Repolish only when the colour actually changes - doing it every tick would
+            # make the style engine rebuild these widgets twice a second for nothing.
+            bar.setProperty("tone", tone)
+            bar.style().unpolish(bar)
+            bar.style().polish(bar)
+
+
+class AppBar(QFrame):
+    """Dark identity bar: who made it, what it is, and what it is costing the machine.
+
+    The two badges that used to live here are gone. The mode and the PLC's simulation
+    state are both already spelled out in the status chips one row below, and saying the
+    same thing twice in two different vocabularies is what made the bar look busy.
+
+    All three groups share a single grid cell with three different alignments, so the
+    product name sits at the true centre of the bar rather than at the centre of
+    whatever the left and right groups happen to leave over - those are nowhere near
+    the same width, and a stretch-based layout would push the title noticeably left.
     """
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setObjectName("AppBar")
         self.setFixedHeight(BAR_HEIGHT)
-        lay = QHBoxLayout(self)
-        lay.setContentsMargins(14, 0, 18, 0)
-        lay.setSpacing(13)
+        grid = QGridLayout(self)
+        grid.setContentsMargins(14, 0, 18, 0)
+        grid.setSpacing(0)
 
-        # Every item is centred explicitly. Without an alignment a QHBoxLayout stretches
-        # its widgets to the full bar height, which turns the pills into slabs and the
-        # logo plate into a white block running edge to edge.
         middle = Qt.AlignmentFlag.AlignVCenter
-        lay.addWidget(self._company_mark(), 0, middle)
-        lay.addWidget(_divider(), 0, middle)
+        self._left = self._company_mark()
+        self._title = self._title_block()
+        self._right = self._status_block()
+        grid.addWidget(self._left, 0, 0, Qt.AlignmentFlag.AlignLeft | middle)
+        grid.addWidget(self._title, 0, 0, Qt.AlignmentFlag.AlignHCenter | middle)
+        grid.addWidget(self._right, 0, 0, Qt.AlignmentFlag.AlignRight | middle)
 
-        block = QVBoxLayout()
-        block.setContentsMargins(0, 0, 0, 0)
-        block.setSpacing(1)
+    def minimumSizeHint(self):  # noqa: N802 (Qt API)
+        """Stacked in one cell, the grid would happily let the three groups overlap."""
+        gap = 24
+        width = (self._left.sizeHint().width() + self._title.sizeHint().width()
+                 + self._right.sizeHint().width() + 14 + 18 + 2 * gap)
+        return QSize(width, BAR_HEIGHT)
+
+    def _title_block(self) -> QWidget:
+        block = QWidget()
+        block.setProperty("class", "transparent")
+        lay = QVBoxLayout(block)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(1)
         name = QLabel("VisionGuard")
         name.setProperty("class", "brand")
         sub = QLabel("Person-in-Area Monitoring")
         sub.setProperty("class", "brandsub")
-        block.addWidget(name)
-        block.addWidget(sub)
-        lay.addLayout(block)
+        for label in (name, sub):
+            label.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+            lay.addWidget(label)
+        return block
 
-        lay.addStretch(1)
+    def _status_block(self) -> QWidget:
+        block = QWidget()
+        block.setProperty("class", "transparent")
+        lay = QHBoxLayout(block)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(13)
+        middle = Qt.AlignmentFlag.AlignVCenter
 
-        self.badge_mode = QLabel("AI CAMERA")
-        self.badge_mode.setProperty("class", "headerbadge")
-        self.badge_mode.setToolTip("Nguồn phát hiện người đang dùng")
-        lay.addWidget(self.badge_mode, 0, middle)
-
-        self.badge_plc = QLabel("PLC SIMULATION")
-        self.badge_plc.setProperty("class", "headerbadge")
-        self.badge_plc.setProperty("tone", "warn")
-        self.badge_plc.setToolTip("PLC đang chạy ở chế độ mô phỏng, không ghi ra thiết bị thật")
-        lay.addWidget(self.badge_plc, 0, middle)
-        self.badge_plc.hide()
-
+        self.meter = ResourceMeter()
+        lay.addWidget(self.meter, 0, middle)
         lay.addWidget(_divider(), 0, middle)
 
         clock = QVBoxLayout()
@@ -149,6 +250,10 @@ class AppBar(QFrame):
             label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
             clock.addWidget(label)
         lay.addLayout(clock)
+        return block
+
+    def refresh_resources(self) -> None:
+        self.meter.refresh()
 
     def _company_mark(self) -> QFrame:
         """The company wordmark on a white plate, or its name if the file is missing."""
@@ -169,12 +274,6 @@ class AppBar(QFrame):
                                 " letter-spacing: 1px; background: transparent;")
         inner.addWidget(label)
         return plate
-
-    def set_mode(self, text: str) -> None:
-        self.badge_mode.setText(text)
-
-    def set_simulation(self, on: bool) -> None:
-        self.badge_plc.setVisible(on)
 
     def set_clock(self, time_text: str, date_text: str = "") -> None:
         self.lbl_time.setText(time_text)
