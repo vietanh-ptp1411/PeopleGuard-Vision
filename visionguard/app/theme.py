@@ -104,6 +104,25 @@ def state_colors(state: str) -> tuple[str, str]:
     return STATE_COLORS.get(state, STATE_COLORS["off"])
 
 
+# --------------------------------------------------------------------------- assets
+def _arrow(name: str) -> str:
+    """Absolute path to an arrow image, in the form a Qt stylesheet will accept.
+
+    Forward slashes even on Windows - a backslash in a stylesheet url() is an escape
+    character and the image silently fails to load, which is exactly the class of bug
+    that left the combo boxes looking like text fields in the first place.
+    """
+    from ..utils.paths import asset_path
+    return str(asset_path(name)).replace(chr(92), "/")
+
+
+ARROW_DOWN = _arrow("arrow_down.png")
+ARROW_UP = _arrow("arrow_up.png")
+ARROW_DOWN_ACCENT = _arrow("arrow_down_accent.png")
+ARROW_DOWN_OFF = _arrow("arrow_down_off.png")
+ARROW_UP_OFF = _arrow("arrow_up_off.png")
+
+
 # --------------------------------------------------------------------------- stylesheet
 QSS = f"""
 QWidget {{
@@ -291,12 +310,48 @@ QLineEdit:disabled, QSpinBox:disabled, QDoubleSpinBox:disabled, QComboBox:disabl
     color: #A7B2BF; background-color: #F3F5F9; border-color: #E4E9F0;
 }}
 QLineEdit::placeholder {{ color: {COLOR_TEXT_MUTED}; }}
-QComboBox::drop-down {{ border: none; width: 22px; }}
-QSpinBox::up-button, QDoubleSpinBox::up-button, QSpinBox::down-button, QDoubleSpinBox::down-button {{
-    width: 17px; border: none; background: transparent;
+
+/* A field you pick from must not look like a field you type in. Styling a QComboBox at
+   all makes Qt drop its native arrow, so the old rule - drop-down with no border and no
+   arrow - left every combo looking exactly like a QLineEdit. Same for the spin buttons.
+   Three input types, three appearances: a combo is grey with an arrow, a spin box is
+   white with a stepper, a line edit is plain white and empty on the right. */
+QComboBox {{ background-color: {COLOR_PANEL_ALT}; padding-right: 26px; }}
+QComboBox:hover {{ background-color: #EDF2F9; }}
+QComboBox::drop-down {{
+    subcontrol-origin: padding;
+    subcontrol-position: center right;
+    width: 24px;
+    border: none;
+    border-left: 1px solid {COLOR_BORDER};
+}}
+/* Real images. The CSS zero-size-plus-borders triangle is a browser idiom; Qt renders
+   it as a filled square, which is how the arrows ended up looking like little blocks. */
+QComboBox::down-arrow {{ image: url({ARROW_DOWN}); width: 9px; height: 6px; }}
+QComboBox::down-arrow:hover {{ image: url({ARROW_DOWN_ACCENT}); }}
+QComboBox::down-arrow:disabled {{ image: url({ARROW_DOWN_OFF}); }}
+
+QSpinBox, QDoubleSpinBox {{ padding-right: 20px; }}
+QSpinBox::up-button, QDoubleSpinBox::up-button,
+QSpinBox::down-button, QDoubleSpinBox::down-button {{
+    subcontrol-origin: border;
+    width: 18px;
+    border: none;
+    border-left: 1px solid {COLOR_BORDER};
+    background: {COLOR_PANEL_ALT};
+}}
+QSpinBox::up-button, QDoubleSpinBox::up-button {{ subcontrol-position: top right; }}
+QSpinBox::down-button, QDoubleSpinBox::down-button {{ subcontrol-position: bottom right; }}
+QSpinBox::up-arrow, QDoubleSpinBox::up-arrow {{
+    image: url({ARROW_UP}); width: 8px; height: 5px;
+}}
+QSpinBox::down-arrow, QDoubleSpinBox::down-arrow {{
+    image: url({ARROW_DOWN}); width: 8px; height: 5px;
 }}
 QSpinBox::up-button:hover, QDoubleSpinBox::up-button:hover,
 QSpinBox::down-button:hover, QDoubleSpinBox::down-button:hover {{ background: {COLOR_ACCENT_SOFT}; }}
+QSpinBox::up-arrow:disabled, QDoubleSpinBox::up-arrow:disabled {{ image: url({ARROW_UP_OFF}); }}
+QSpinBox::down-arrow:disabled, QDoubleSpinBox::down-arrow:disabled {{ image: url({ARROW_DOWN_OFF}); }}
 QComboBox QAbstractItemView {{
     background-color: {COLOR_PANEL};
     border: 1px solid {COLOR_BORDER_STRONG};
