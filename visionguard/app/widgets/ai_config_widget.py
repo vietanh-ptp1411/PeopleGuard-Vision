@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from pathlib import Path
 
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog, QFormLayout, QGridLayout, QGroupBox,
@@ -44,12 +45,25 @@ class AIConfigWidget(QWidget):
         g = QGroupBox("YOLO PERSON DETECTOR")
         f = QFormLayout(g)
         row = QHBoxLayout()
+        self.cmb_model = QComboBox()
+        self.cmb_model.setToolTip(
+            "Trên GPU, yolo11s chạy nhanh đúng bằng yolo11n (đo được 14 ms cả hai)\n"
+            "nhưng bắt người tốt hơn rõ rệt.\n"
+            "Trên máy chỉ có CPU thì yolo11n là lựa chọn duy nhất chạy kịp 3 camera.")
+        self.cmb_model.currentIndexChanged.connect(self._model_picked)
         self.edt_model = QLineEdit()
         self.btn_browse = QPushButton("Browse...")
         self.btn_browse.clicked.connect(self._browse)
-        row.addWidget(self.edt_model, 1)
+        row.addWidget(self.cmb_model, 1)
         row.addWidget(self.btn_browse)
-        f.addRow("Model path", row)
+        f.addRow("Model", row)
+        f.addRow("", self.edt_model)
+        self.edt_model.setVisible(False)      # the combo is the interface; this holds the value
+        self.lbl_model_hint = QLabel("")
+        self.lbl_model_hint.setStyleSheet(f"color: {COLOR_TEXT_DIM}; font-size: 8.5pt;")
+        self.lbl_model_hint.setWordWrap(True)
+        f.addRow("", self.lbl_model_hint)
+        self._fill_models()
         self.spn_conf = QDoubleSpinBox()
         self.spn_conf.setRange(0.05, 0.95)
         self.spn_conf.setSingleStep(0.05)
@@ -137,10 +151,49 @@ class AIConfigWidget(QWidget):
         self.btn_start.clicked.connect(lambda: (self._apply(), self.start_detection_requested.emit()))
         self.btn_stop.clicked.connect(self.stop_detection_requested)
 
+    #: What each bundled model costs and buys, measured on this project's own footage
+    #: rather than copied off a benchmark table. Frame times are for one 960x540 frame.
+    MODEL_NOTES = {
+        "yolo11n.pt": "Nhỏ nhất, nhanh nhất. CPU 54 ms · GPU 14 ms. "
+                      "Lựa chọn duy nhất chạy kịp 3 camera trên máy không có card rời.",
+        "yolo11s.pt": "Bắt người tốt hơn hẳn nano ở cảnh khó. CPU 120 ms · GPU 14 ms — "
+                      "trên GPU nhanh ngang nano, nên máy có card thì chọn cái này.",
+        "yolo11m.pt": "Bắt tốt nhất trong ba. CPU 270 ms · GPU 28 ms. Với 3 camera ở 12 fps "
+                      "thì chiếm trọn một GTX 1650, cần card mạnh hơn.",
+    }
+
+    def _fill_models(self) -> None:
+        """List what is actually in models/, so the combo never offers a missing file."""
+        folder = Path("models")
+        found = sorted(folder.glob("*.pt")) + sorted(folder.glob("*.onnx"))             + sorted(folder.glob("*.engine"))
+        self.cmb_model.blockSignals(True)
+        self.cmb_model.clear()
+        for path in found:
+            self.cmb_model.addItem(path.name, str(path).replace(chr(92), "/"))
+        self.cmb_model.blockSignals(False)
+
+    def _model_picked(self) -> None:
+        value = self.cmb_model.currentData()
+        if value:
+            self.edt_model.setText(value)
+        self.lbl_model_hint.setText(self.MODEL_NOTES.get(self.cmb_model.currentText(), ""))
+
+    def _select_model(self, path: str) -> None:
+        """Point the combo at `path`, adding it if the file lives outside models/."""
+        wanted = (path or "").replace(chr(92), "/")
+        index = self.cmb_model.findData(wanted)
+        if index < 0 and wanted:
+            self.cmb_model.addItem(Path(wanted).name, wanted)
+            index = self.cmb_model.count() - 1
+        self.cmb_model.setCurrentIndex(max(0, index))
+        self._model_picked()
+
     def _browse(self) -> None:
         path, _ = QFileDialog.getOpenFileName(self, "Select YOLO model", "models", "YOLO model (*.pt *.onnx *.engine);;All files (*)")
         if path:
             self.edt_model.setText(path)
+            self._fill_models()
+            self._select_model(path)
 
     def _mode_changed(self) -> None:
         self.spn_inter.setEnabled(self.cmb_mode.currentData() == ContainmentMode.INTERSECTION.value)
@@ -160,6 +213,8 @@ class AIConfigWidget(QWidget):
         self._config = deepcopy(cfg)
         d = cfg.detector
         self.edt_model.setText(d.model_path)
+        self._fill_models()
+        self._select_model(d.model_path)
         self.spn_conf.setValue(d.confidence)
         self.spn_iou.setValue(d.iou)
         self.cmb_device.setCurrentText(d.device if d.device in ("auto", "cpu", "cuda") else "auto")

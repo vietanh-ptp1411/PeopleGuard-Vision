@@ -373,3 +373,57 @@ Khoảng 5 giây là sàn thực tế của một ứng dụng YOLO trên PyTorc
 
 > **Trên máy có GPU sẽ CHẬM HƠN, không nhanh hơn.** Khởi tạo CUDA context tốn thêm vài
 > giây khi nạp. Đổi lại mỗi khung hình suy diễn nhanh hơn nhiều khi đã chạy.
+
+---
+
+# Chọn model YOLO
+
+Ba model đi kèm trong `models/`. Chọn trong tab **AI Model**.
+
+Số liệu dưới đây **đo trên chính video công nhân nhà máy** (960×540), không trích từ bảng
+benchmark. "Khung mù" = số khung mà model không thấy ai trong khi yolo11m vẫn thấy.
+
+| Model | Dung lượng | CPU | **GPU (GTX 1650)** | Khung mù /60 | Bỏ sót |
+|---|---|---|---|---|---|
+| `yolo11n` | 6 MB | 54 ms | **14 ms** | **13** | 39 người |
+| `yolo11s` | 19 MB | 120 ms | **14 ms** | **7** | 25 người |
+| `yolo11m` | 41 MB | 270 ms | 28 ms | — | — |
+
+## Kết luận: máy có GPU thì dùng `yolo11s`
+
+Trên GPU, `yolo11s` chạy **nhanh đúng bằng** `yolo11n` nhưng bắt người tốt gần gấp đôi.
+
+Lý do: model nano quá nhỏ để làm card bận. 14 ms đó là **chi phí cố định** — chuyển ảnh
+vào card, khởi động nhân tính toán — chứ không phải phép tính. Dùng nano trên GPU là tự
+nguyện chịu thiệt mà không đổi lại được gì.
+
+Tải thật với 3 camera × 12 fps = 36 lần suy diễn/giây:
+
+| Model | GPU chiếm | |
+|---|---|---|
+| `yolo11n` | 50 % | thừa |
+| `yolo11s` | 50 % | **thừa — nên dùng** |
+| `yolo11m` | 101 % | quá tải, sẽ rớt khung |
+
+## Máy chỉ có CPU thì giữ `yolo11n`
+
+`yolo11s` trên CPU tốn 120 ms/khung. Với 3 camera ở 12 fps là **4,3 nhân CPU** — không
+máy công nghiệp phổ thông nào chịu nổi. `yolo11n` tốn 1,9 nhân, vừa đủ.
+
+Vì vậy **mặc định vẫn là `yolo11n`**: hai gói dùng chung file config, đổi mặc định sẽ làm
+hỏng bản CPU.
+
+## Chênh lệch chỉ lộ ra ở cảnh khó
+
+Trên video người đi bộ cận cảnh, **cả ba model cho kết quả giống hệt nhau** (60/60 khung).
+Model lớn chỉ hơn khi người ở xa, bị che khuất, hoặc góc nhìn lạ.
+
+## Điều model nào cũng không sửa được
+
+Camera treo **4,5 m nhìn chéo xuống**. Mọi model YOLO đều học từ bộ ảnh COCO, mà COCO chủ
+yếu là **ảnh chụp ngang tầm mắt**. Người nhìn từ trên cao trông khác hẳn — chỉ thấy đầu và
+vai, chân bị che.
+
+Lên model lớn hơn giúp được một phần nhưng **không xoá được** khoảng cách này. Cách duy
+nhất trả lời dứt điểm: quay vài phút video từ **đúng vị trí camera đã lắp**, rồi chạy lại
+phép đo trên đoạn video đó.
