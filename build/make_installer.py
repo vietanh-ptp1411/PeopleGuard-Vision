@@ -23,6 +23,9 @@ import time
 import zipfile
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from make_zip import blank_site_config  # noqa: E402  - both packages blank it the same way
+
 BUILD = Path(__file__).resolve().parent
 ROOT = BUILD.parent
 DIST = BUILD / "dist"
@@ -56,7 +59,6 @@ def stage_app() -> None:
 
 def stage_payload() -> None:
     print("\n=== 2/3  Packing the payload ===", flush=True)
-    # A clean default config ships with the installer; an existing site keeps its own.
     staging = BUILD / "staging"
     shutil.rmtree(staging, ignore_errors=True)
     shutil.copytree(BUNDLE, staging)
@@ -67,6 +69,12 @@ def stage_payload() -> None:
     # never ship the site's own recordings or history
     for junk in ("logs", "events", "release"):
         shutil.rmtree(staging / junk, ignore_errors=True)
+    # This used to say a clean default config was shipped, while copying whatever was in
+    # the repository - video paths off the build machine, leftover zones, a guessed PLC
+    # address. The pre-flight then reported a ready system that could not see anything.
+    # The installer keeps an existing site's config on upgrade; this is only what a first
+    # install starts from, and it should start from nothing.
+    blank_site_config(staging / "config")
     for stale in staging.rglob("*.tmp"):
         stale.unlink(missing_ok=True)
 
