@@ -4,7 +4,7 @@ Có hai gói sẵn trong `release\`:
 
 | Gói | Dung lượng | Dùng khi |
 |---|---|---|
-| **`VisionGuard-GPU.zip`** | 3,08 GB | Máy khách **có card NVIDIA** — nhanh nhất |
+| **`VisionGuard-GPU.zip`** | 3,13 GB | Máy khách **có card NVIDIA** — nhanh nhất |
 | **`VisionGuard-Setup.exe`** | 377 MB | Máy khách **không có card rời**, hoặc muốn gọn |
 
 Cả hai đều không cần cài Python và không cần mạng trên máy đích.
@@ -25,7 +25,10 @@ Gói này kèm **torch 2.11.0+cu128**. Máy khách cần:
 - Card NVIDIA đời Turing (GTX 16xx / RTX 20xx) trở lên
 - Driver NVIDIA đủ mới cho CUDA 12.8 — driver từ 2025 trở đi là an toàn
 
-Đã chạy thử trên GTX 1650: log ghi `YOLO loaded: yolo11n.pt | cuda:0`.
+Gói kèm sẵn ba model và đã cấu hình dùng `yolo11s`. Đo trên GTX 1650: `yolo11s`
+tốn đúng 14 ms/khung y như `yolo11n`, nhưng trên cùng đoạn video nó chỉ bỏ sót
+người ở 7/60 khung thay vì 13/60 — cùng giá, nhìn rõ hơn. Chi tiết ở mục
+**Chọn model YOLO**.
 
 Nếu máy không có card hợp lệ, phần mềm vẫn chạy nhưng tự rơi về CPU (chậm hơn, vẫn dùng
 được vì bộ phát hiện đã giới hạn 12 fps).
@@ -82,6 +85,53 @@ build\venv-gpu\Scripts\python.exe  build\make_zip.py --venv venv-gpu --name GPU 
 ```
 
 Kết quả nằm trong `release\`.
+
+---
+
+# Lần chạy đầu — phần mềm được giao ở trạng thái **chưa cấu hình**
+
+Cả hai gói đều chở theo một `config` trắng: **1 camera, không IP, không vùng ROI, PLC ở
+chế độ mô phỏng**. Nên ngay cuối `Install.bat` sẽ có dòng:
+
+```
+[FAIL]  Camera 1   no IP configured
+KHONG THE CHAY: sua cac muc [FAIL] o tren roi thu lai.
+```
+
+**Đây là đúng, không phải lỗi cài đặt.**
+
+Trước đây gói chở theo config của máy build — đường dẫn video trong `Downloads`, bốn vùng
+ROI thừa, IP camera mẫu. Bài kiểm báo "SẴN SÀNG" trong khi phần mềm không nhìn thấy gì
+cả. Một bài kiểm chỉ có ích khi nó **hỏng ở đây, trên bàn**, chứ không phải ở hiện trường
+lúc dây đã đấu xong.
+
+### Thứ tự cấu hình
+
+| # | Việc | Ở đâu |
+|---|---|---|
+| 1 | Mở `VisionGuard.exe` — lối tắt Desktop, **không** phải Launcher | |
+| 2 | Nhập IP, tài khoản, mật khẩu camera | tab **CAMERA** |
+| 3 | Vẽ vùng cấm người vào | tab **ROI** |
+| 4 | Nhập IP PLC, rồi **bỏ** dấu tích *Simulation* | tab **PLC** |
+| 5 | Lưu lại, đóng phần mềm | |
+| 6 | Chạy `VisionGuardLauncher.exe --check-only` đến khi hết `[FAIL]` | |
+
+Bước 4 là bước duy nhất chạm vào phần cứng thật. **Để nguyên *Simulation* thì không một
+bit nào được ghi ra PLC** — bài kiểm nhắc điều đó bằng một dòng `[WARN]` ở mỗi lần khởi
+động, kể cả khi mọi mục khác đã đạt.
+
+### Vì sao lối tắt Desktop trỏ vào `VisionGuard.exe` chứ không phải Launcher
+
+Launcher **từ chối khởi động** khi bài kiểm còn `[FAIL]`: nó thử lại trong 3 phút rồi
+dừng và ghi lý do vào `logs\launcher.log`. Đúng với một máy chạy 24/7 không người trông
+— nhưng sẽ thành ngõ cụt nếu lần đầu khách bấm vào nó, vì chưa cấu hình thì không vào
+được, mà không vào được thì không cấu hình được.
+
+Vì vậy lối tắt Desktop đi thẳng vào `VisionGuard.exe`, luôn mở được kể cả khi chưa cấu
+hình gì. Launcher chỉ nằm ở tác vụ tự khởi động và ở Start Menu.
+
+Tác vụ tự khởi động đã đăng ký ngay lúc cài, nên cấu hình xong chỉ cần đăng xuất rồi đăng
+nhập lại là máy tự chạy — không phải cài lại.
 
 ---
 

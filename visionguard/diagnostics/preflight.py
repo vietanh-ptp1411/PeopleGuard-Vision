@@ -133,9 +133,18 @@ def check_cameras(r: Report, settings) -> None:
         elif unit.type_enum.value == "rtsp":
             host, port = unit.rtsp.ip, unit.rtsp.port
         elif unit.type_enum.value == "video":
-            path = Path(unit.video.path)
-            r.add(OK if path.exists() else FAIL, label,
-                  f"video file {path}" + ("" if path.exists() else " - not found"))
+            # An empty path becomes Path("."), and "." exists - so a camera with nothing
+            # configured used to pass this check and then fail at the first frame. The
+            # whole point of a pre-flight is that it fails here instead of at the site.
+            raw = (unit.video.path or "").strip()
+            path = Path(raw)
+            if not raw:
+                r.add(FAIL, label, "no video file configured")
+            elif not path.is_file():
+                what = "is a folder, not a video" if path.is_dir() else "not found"
+                r.add(FAIL, label, f"video file {path} - {what}")
+            else:
+                r.add(OK, label, f"video file {path.name} ({path.stat().st_size / 1e6:.0f} MB)")
             continue
         else:
             r.add(OK, label, unit.describe_source())
@@ -156,7 +165,11 @@ def check_plc(r: Report, settings) -> None:
         r.add(WARN, "PLC", "SIMULATION - nothing is written to real hardware")
         return
     host, port = plc.connection.ip, plc.connection.port
-    if _reachable(host, port):
+    if not str(host).strip():
+        # Without this the report says "does not answer", which sends somebody looking
+        # for a cable fault when the real answer is that nobody has typed the address.
+        r.add(FAIL, "PLC", "no IP configured - enter the PLC address, or tick Simulation")
+    elif _reachable(host, port):
         r.add(OK, "PLC", f"{host}:{port} answers (MC Protocol {plc.connection.frame})")
     else:
         r.add(FAIL, "PLC", f"{host}:{port} does not answer - is the SLMP connection declared "
