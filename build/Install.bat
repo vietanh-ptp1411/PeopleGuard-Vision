@@ -59,11 +59,42 @@ echo   [3/3] Kiem tra he thong...
 echo.
 "%CD%\VisionGuardLauncher.exe" --check-only
 echo.
+rem  0 = dat, 2 = dat nhung co canh bao, 1 = con loi phai sua truoc khi chay
+if errorlevel 2 goto ready
+if errorlevel 1 goto needconfig
+goto ready
 
+:needconfig
+echo ================================================================
+echo   CAN CAU HINH TRUOC KHI CHAY
+echo ================================================================
+echo.
+echo   Phan mem duoc giao o trang thai CHUA CAU HINH, nen dong [FAIL]
+echo   o tren la dung - khong phai loi cai dat.
+echo.
+echo   Lam theo thu tu nay:
+echo.
+echo     1. Mo VisionGuard.exe  - loi tat ngoai Desktop
+echo     2. Tab CAMERA : nhap IP, tai khoan, mat khau camera
+echo     3. Tab ROI    : ve vung cam nguoi vao
+echo     4. Tab PLC    : nhap IP PLC, roi BO dau tich "Simulation"
+echo                     De nguyen Simulation thi KHONG ghi gi ra PLC that.
+echo     5. Luu lai, dong phan mem
+echo     6. Chay lai:  VisionGuardLauncher.exe --check-only
+echo        den khi khong con dong [FAIL] nao.
+echo.
+echo   Tu khoi dong da dang ky roi - cau hinh xong chi can dang xuat
+echo   va dang nhap lai, khong phai cai lai.
+echo.
+goto paths
+
+:ready
 echo ================================================================
 echo   XONG
 echo ================================================================
 echo.
+
+:paths
 echo   Chay ngay        : VisionGuard.exe  (hoac loi tat ngoai Desktop)
 echo   Chay co giam sat : VisionGuardLauncher.exe
 echo   Kiem tra lai     : VisionGuardLauncher.exe --check-only

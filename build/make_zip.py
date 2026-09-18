@@ -11,6 +11,7 @@ costs the customer one extraction.
 from __future__ import annotations
 
 import argparse
+import json
 import shutil
 import subprocess
 import sys
@@ -33,11 +34,66 @@ def folder_gb(path: Path) -> float:
     return sum(f.stat().st_size for f in path.rglob("*") if f.is_file()) / 1e9
 
 
+def blank_site_config(folder: Path) -> None:
+    """Replace the build machine's settings with a config that is honestly unconfigured.
+
+    What used to ship was whatever happened to be in the repository: video files off this
+    laptop, four leftover test zones, placeholder camera IPs. All of it looks plausible
+    and none of it is the site's, so the pre-flight reported a healthy system that could
+    not see anything. A blank config fails the pre-flight on the first run, loudly and
+    with the reason - which is the whole point of having one.
+
+    PLC simulation stays on. Nothing should write to a real PLC until somebody has looked
+    at the addresses; the pre-flight warns about it every single start.
+    """
+    def edit(name: str, change) -> None:
+        path = folder / name
+        data = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+        change(data)
+        path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+
+    def cameras(data: dict) -> None:
+        data["count"] = 1
+        data["extra"] = []
+        data["camera_type"] = "rtsp"
+        for section in ("video",):
+            data.setdefault(section, {})["path"] = ""
+        for section in ("rtsp", "ai_camera"):
+            block = data.setdefault(section, {})
+            block["ip"] = ""
+            block["username"] = ""
+            block["password"] = ""
+            if "url" in block:
+                block["url"] = ""
+            if "rtsp_url" in block:
+                block["rtsp_url"] = ""
+
+    def plc(data: dict) -> None:
+        data["simulation_mode"] = True
+        # The PLC address was a guess about the customer's network - the same kind of
+        # plausible-looking default that made the camera checks pass on nothing. Blank
+        # it: with no address the pre-flight asks for one, instead of sending MC frames
+        # to whatever else happens to live at 192.168.1.10.
+        data.setdefault("connection", {})["ip"] = ""
+
+    edit("camera_config.json", cameras)
+    edit("roi_config.json", lambda d: d.update({"rois": []}))
+    edit("plc_config.json", plc)
+    print("  config blanked for the site: 1 camera, no IP, no zones, PLC in simulation",
+          flush=True)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--venv", default="venv-gpu", help="build environment under build/")
     ap.add_argument("--name", default="GPU", help="label used in the zip name")
     ap.add_argument("--skip-build", action="store_true", help="reuse the existing bundle")
+    ap.add_argument("--model", default=None,
+                    help="detector to ship in the package's own config, e.g. yolo11s.pt. "
+                         "The repository's config is not touched - a GPU package wants a "
+                         "different model from the machine it was built on.")
+    ap.add_argument("--keep-dev-config", action="store_true",
+                    help="ship this machine's config as-is instead of a blank site config")
     args = ap.parse_args()
 
     started = time.time()
@@ -67,6 +123,23 @@ def main() -> int:
     shutil.copy2(ROOT / "tools" / "README-TRIEN-KHAI.md", bundle / "HUONG-DAN.md")
     for junk in ("logs", "events"):
         shutil.rmtree(bundle / junk, ignore_errors=True)
+
+    if not args.keep_dev_config:
+        blank_site_config(bundle / "config")
+
+    if args.model:
+        # The machine that builds and the machine that runs want different detectors.
+        # Measured on a GTX 1650 over the same 60 frames: yolo11s costs the same 14ms as
+        # yolo11n but loses the person in 7 frames instead of 13 - same price, misses
+        # half as often. On a CPU box that swap doubles the frame time, which is why it
+        # is set here per package and not in the repository's config.
+        path = bundle / "config" / "ai_config.json"
+        data = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+        data.setdefault("detector", {})["model_path"] = f"models/{args.model}"
+        path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+        print(f"  config in the package now points at models/{args.model}", flush=True)
+        if not (bundle / "models" / args.model).exists():
+            raise SystemExit(f"models/{args.model} is not in the bundle - nothing would load")
 
     print("\n=== 3/3  Zipping ===", flush=True)
     OUT.mkdir(exist_ok=True)
