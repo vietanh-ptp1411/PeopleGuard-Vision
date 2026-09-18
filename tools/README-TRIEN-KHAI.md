@@ -427,3 +427,40 @@ vai, chân bị che.
 Lên model lớn hơn giúp được một phần nhưng **không xoá được** khoảng cách này. Cách duy
 nhất trả lời dứt điểm: quay vài phút video từ **đúng vị trí camera đã lắp**, rồi chạy lại
 phép đo trên đoạn video đó.
+
+---
+
+# Số camera tối đa
+
+**6 camera** cho mỗi bản chạy VisionGuard.
+
+Giao diện **không phải** giới hạn: lưới dựng được 9 ô vẫn vừa màn hình 1536×816. Giới hạn
+thật là **card đồ hoạ**. Đo trên GTX 1650, imgsz 640:
+
+| Model | ms/khung | GPU mỗi camera @ 12 fps | Tối đa |
+|---|---|---|---|
+| `yolo11n` / `yolo11s` | 14 | 17 % | **5 camera** |
+| `yolo11m` | 28 | 34 % | 2 camera |
+
+Đặt giới hạn 6 chứ không phải 5 vì đây là **đánh đổi, không phải bức tường**: 6 camera chạy
+được nếu hạ `max_fps` từ 12 xuống 10 (6 × 10 × 14 ms = 84 % card). Card mạnh hơn thì
+nhiều hơn nữa.
+
+Cần trên 6 thì sửa `MAX_CAMERAS` trong `visionguard/config/schemas.py` — nhưng hãy tính
+tải card trước, vì phần mềm sẽ không tự ngăn bạn chọn quá sức máy.
+
+# Ba loại ô nhập trong giao diện
+
+| Loại | Nhận biết | Dùng để |
+|---|---|---|
+| **Combo** | Nền xám, có tam giác bên phải | Chọn trong danh sách có sẵn |
+| **Spin box** | Nền trắng, mũi tên tăng/giảm | Nhập số |
+| **Text box** | Trắng trơn, bên phải trống | Gõ chữ tự do |
+
+Trước đây cả ba trông giống hệt nhau: QSS đặt `QComboBox::drop-down` không viền và **không
+vẽ mũi tên nào**, mà khi một widget đã được style bằng stylesheet thì Qt bỏ mũi tên mặc
+định của hệ thống.
+
+Mũi tên là **file ảnh** trong `visionguard/app/assets/`, không phải CSS. Mẹo vẽ tam giác
+bằng `width: 0; height: 0` cộng border là thành ngữ của trình duyệt — Qt vẽ ra một ô vuông
+đặc. Chỉ phát hiện được bằng cách chụp ảnh giao diện rồi nhìn.

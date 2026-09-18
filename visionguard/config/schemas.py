@@ -242,8 +242,14 @@ class AiCameraConfig:
         )
 
 
-#: how many cameras one VisionGuard instance can watch at once
-MAX_CAMERAS = 4
+#: How many cameras one VisionGuard instance can watch at once.
+#:
+#: The window is not what decides this - the grid lays out nine tiles and still fits a
+#: 1536x816 screen. The card decides it. Measured on a GTX 1650 at imgsz 640, yolo11n and
+#: yolo11s both cost 14 ms an inference, so at the default 12 fps each camera takes 17% of
+#: the card and five is the ceiling. Six fits by dropping max_fps to 10, and a stronger
+#: card carries more, so this is a trade rather than a wall - see the deployment note.
+MAX_CAMERAS = 6
 
 
 @dataclass
