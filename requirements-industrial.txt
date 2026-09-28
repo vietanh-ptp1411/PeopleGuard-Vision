@@ -5,5 +5,7 @@ pypylon>=3.0
 harvesters>=1.4
 # ByteTrack tracking cho ultralytics (Person ID):
 lap>=0.5.12
-# Hikrobot MVS SDK: khong co tren PyPI. Cai MVS tu Hikrobot, sau do them
-#   <MVS>/Development/Samples/Python/MvImport  vao PYTHONPATH.
+# Hikrobot MVS SDK: khong co tren PyPI, nam san trong ban cai MVS.
+# Chi can cai MVS roi mo lai phan mem - phan mem tu tim thu muc MvImport
+# (theo MVCAM_COMMON_RUNENV, roi C:\Program Files (x86)\MVS\...), khong
+# phai them PYTHONPATH nua.

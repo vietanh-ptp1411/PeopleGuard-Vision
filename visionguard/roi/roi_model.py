@@ -20,6 +20,17 @@ class RoiType(str, Enum):
         return "Include" if self is RoiType.INCLUDE else "Exclusion"
 
 
+#: The zone a camera is watched with when nobody has drawn one on it: the whole picture.
+#: It is never stored or listed, only handed to the processor at evaluation time, so it
+#: can have no PLC address of its own - a person in it raises the group bit only.
+FULL_FRAME_ID = "FULL_FRAME"
+
+
+def full_frame_roi(camera: int = 0) -> "Roi":
+    return Roi(id=FULL_FRAME_ID, name="Toàn khung hình", type=RoiType.INCLUDE, enabled=True,
+               points=[(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)], camera=int(camera))
+
+
 @dataclass
 class Roi:
     id: str

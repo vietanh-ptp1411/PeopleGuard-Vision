@@ -6,7 +6,7 @@
     "plc_type": "mitsubishi",
     "protocol": "mc_protocol",
     "plc_series": "Q Series",
-    "ip": "192.168.1.10",
+    "ip": "",
     "port": 5000,
     "frame": "3E",
     "frame_format": "binary",
@@ -25,11 +25,11 @@
   },
   "mapping": {
     "device_person": "M100",
+    "device_heartbeat": "M110",
     "device_clear": "",
     "device_camera_ok": "",
     "device_ai_running": "",
     "device_fault": "",
-    "device_heartbeat": "M110",
     "device_status_word": "",
     "write_roi_devices": false
   },

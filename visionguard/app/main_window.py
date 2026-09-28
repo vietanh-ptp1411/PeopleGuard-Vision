@@ -24,33 +24,32 @@ from pathlib import Path
 
 from PySide6.QtCore import Qt, QTimer, QUrl
 from PySide6.QtGui import QAction, QCloseEvent, QDesktopServices, QKeySequence
-from PySide6.QtWidgets import (QApplication, QFrame, QHBoxLayout, QLabel, QMainWindow, QMessageBox, QPushButton, QSplitter,
-                               QTabWidget, QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QApplication, QFrame, QHBoxLayout, QLabel, QMainWindow, QMessageBox, QPushButton,
+                               QSizePolicy, QTabWidget, QVBoxLayout, QWidget)
 
 from ..camera.events.camera_event import CameraEvent
 from ..config.config_manager import ConfigManager
 from ..config.schemas import DetectionMode, EventProviderType
 from ..logic.occupancy_state_machine import OccupancyState
 from ..roi.roi_model import RoiType
-from ..utils.logger import try_import_qt_handler
 from ..workers.camera_worker import CameraState
 from .controllers.system_controller import SystemController
-from .theme import COLOR_TEXT_MUTED, status_caption, status_color
+from .theme import status_caption
 from .widgets.ai_config_widget import AIConfigWidget
 from .widgets.camera_config_widget import CameraConfigWidget
-from .widgets.chrome import AlertStrip, AppBar, ElidedLabel, StateChip, caption, separator
+from .widgets.chrome import AlertStrip, AppBar, ElidedLabel, StateChip, caption
 from .widgets.event_monitor_widget import EventMonitorWidget
-from .widgets.events_widget import EventsWidget
-from .widgets.log_widget import LogWidget
+from .widgets.form_helpers import fit_narrow_panel
 from .widgets.plc_config_widget import PlcConfigWidget
 from .widgets.roi_panel import RoiPanel
 from .widgets.status_panel import StatusPanel
+from .widgets.storage_config_widget import StorageConfigWidget
 from .widgets.video_grid import VideoGrid
 from .widgets.video_view import PLACEHOLDER_AI_CAMERA, PLACEHOLDER_YOLO
 
 log = logging.getLogger("UI")
 
-TAB_STATUS, TAB_CAMERA, TAB_EVENT, TAB_AI, TAB_ROI, TAB_PLC, TAB_HISTORY = range(7)
+TAB_STATUS, TAB_CAMERA, TAB_EVENT, TAB_AI, TAB_ROI, TAB_PLC, TAB_STORAGE = range(7)
 
 
 def _button(text: str, cls: str = "", size: str = "", tooltip: str = "") -> QPushButton:
@@ -73,6 +72,7 @@ class MainWindow(QMainWindow):
 
         # ---------------------------------------------------------- state mirrors (for the chips)
         self._camera_state = CameraState.DISCONNECTED
+        self._camera_message = ""
         self._model_loaded = False
         self._model_error = ""
         self._detecting = False
@@ -91,22 +91,17 @@ class MainWindow(QMainWindow):
         self.ai_cfg = AIConfigWidget(s.ai)
         self.plc_cfg = PlcConfigWidget(s.plc)
         self.roi_panel = RoiPanel()
-        self.events_widget = EventsWidget()
+        self.storage_cfg = StorageConfigWidget(s.app)
         self.event_monitor = EventMonitorWidget()
-        self.log_widget = LogWidget()
         # the manual I/O screen lives inside the PLC tab: it is PLC testing, not a topic of its own
         self.io_test = self.plc_cfg.io_test
 
         self._build_layout()
         self._build_shortcuts()
         self._wire()
-        self._attach_log_handler()
 
         self.video.set_rois(self.ctrl.roi_manager.all())
         self.roi_panel.set_rois(self.ctrl.roi_manager.all())
-        self.events_widget.set_events(self.ctrl.events.recent(300), self.ctrl.events.count())
-        self.events_widget.set_clip_config(s.app.clip)
-        self.log_widget.set_log_file(f"logs/{datetime.now():%Y-%m-%d}.log")
         self._apply_area("STOPPED")
         self.status_panel.set_heartbeat(None, s.plc.heartbeat.enabled)
         self.event_monitor.set_regions(self.ctrl.region_mapping.all())
@@ -134,36 +129,27 @@ class MainWindow(QMainWindow):
         self._meter_timer.start(2000)
         return self.appbar
 
-    def _build_command_bar(self) -> QWidget:
+    def _build_status_row(self) -> QWidget:
+        """The four readouts across the top: what each subsystem is doing right now.
+
+        Readouts only - the buttons that used to share this row now sit in the action bar
+        along the bottom edge. Mixing "press me" with "read me" in one strip made the top
+        of the window busy, and every pixel this row gives back is a pixel the video gets.
+        """
         bar = QFrame()
         bar.setProperty("class", "card")
         lay = QHBoxLayout(bar)
-        lay.setContentsMargins(12, 9, 12, 9)
+        lay.setContentsMargins(12, 5, 12, 5)
         lay.setSpacing(10)
-
-        self.btn_start = _button("▶  START", "success", "xl", "Bắt đầu giám sát (F5)")
-        self.btn_stop = _button("■  STOP", "danger", "xl", "Dừng giám sát (F6)")
-        self.btn_stop.setEnabled(False)
-        self.btn_start.setMinimumWidth(104)
-        self.btn_stop.setMinimumWidth(98)
-        lay.addWidget(self.btn_start)
-        lay.addWidget(self.btn_stop)
-
-        self.btn_sim = _button("PLC SIM", "", "",
-                               "Bật: không cần PLC thật, mọi tín hiệu ghi vào bộ nhớ ảo của phần mềm")
-        self.btn_sim.setCheckable(True)
-        self.btn_sim.setMinimumHeight(38)
-        self.btn_sim.setMinimumWidth(86)
-        lay.addWidget(self.btn_sim)
-
-        lay.addWidget(separator(length=38))
 
         self.chip_camera = StateChip("CAMERA")
         self.chip_detect = StateChip("AI EVENTS")
         self.chip_zones = StateChip("REGIONS")
         self.chip_plc = StateChip("PLC")
+        # No width cap on the chips. Capped, each one floats in the middle of its quarter
+        # of the row and the strip reads as four stickers with gaps between them; letting
+        # them fill turns it into one instrument panel with four gauges.
         for chip in (self.chip_camera, self.chip_detect, self.chip_zones, self.chip_plc):
-            chip.setMaximumWidth(250)
             lay.addWidget(chip, 1)
         return bar
 
@@ -177,7 +163,10 @@ class MainWindow(QMainWindow):
         act_full = QAction("Toggle fullscreen", self)
         act_full.setShortcut(QKeySequence("F11"))
         act_full.triggered.connect(self.toggle_fullscreen)
-        self.addActions([act_start, act_stop, act_full])
+        act_panel = QAction("Toggle control panel", self)
+        act_panel.setShortcut(QKeySequence("F9"))
+        act_panel.triggered.connect(lambda: self.toggle_side_panel())
+        self.addActions([act_start, act_stop, act_full, act_panel])
 
     def _style_sim_button(self, on: bool) -> None:
         # The PLC chip in the status row already says "Mô phỏng (PLC ảo)"; the app bar
@@ -194,41 +183,34 @@ class MainWindow(QMainWindow):
 
         body = QWidget()
         body_lay = QVBoxLayout(body)
-        body_lay.setContentsMargins(10, 10, 10, 8)
-        body_lay.setSpacing(9)
-        body_lay.addWidget(self._build_command_bar())
+        body_lay.setContentsMargins(10, 8, 10, 7)
+        body_lay.setSpacing(7)
+        body_lay.addWidget(self._build_status_row())
 
         self.alert = AlertStrip()
         body_lay.addWidget(self.alert)
 
-        hsplit = QSplitter(Qt.Orientation.Horizontal)
-        hsplit.addWidget(self._build_live_card())
-        hsplit.addWidget(self._build_side_panel())
-        hsplit.setStretchFactor(0, 3)
-        hsplit.setStretchFactor(1, 1)
-        hsplit.setSizes([1000, 500])
-        hsplit.setChildrenCollapsible(False)
-
-        log_card = QFrame()
-        log_card.setProperty("class", "card")
-        log_lay = QVBoxLayout(log_card)
-        log_lay.setContentsMargins(2, 2, 2, 2)
-        log_lay.addWidget(self.log_widget)
-
-        vsplit = QSplitter(Qt.Orientation.Vertical)
-        vsplit.addWidget(hsplit)
-        vsplit.addWidget(log_card)
-        vsplit.setStretchFactor(0, 6)
-        vsplit.setStretchFactor(1, 1)
-        vsplit.setSizes([780, 150])
-        vsplit.setChildrenCollapsible(False)
-        body_lay.addWidget(vsplit, 1)
+        # A fixed split, not a draggable one. An HMI gets nudged by people leaning on the
+        # desk, and a splitter that can be dragged will eventually be dragged - leaving the
+        # live view a sliver and nobody sure how to get it back. The side panel keeps one
+        # width; the video takes everything else and grows with the window.
+        row = QWidget()
+        row_lay = QHBoxLayout(row)
+        row_lay.setContentsMargins(0, 0, 0, 0)
+        row_lay.setSpacing(9)
+        row_lay.addWidget(self._build_live_card(), 1)
+        # Built before the panel, because building the panel is what measures every page
+        # against its fixed width - a control block added afterwards would skip that check.
+        self.status_panel.set_controls(self._build_controls())
+        row_lay.addWidget(self._build_side_panel(), 0)
+        body_lay.addWidget(row, 1)
 
         outer.addWidget(body, 1)
         self.setCentralWidget(central)
 
-        # ---------------- status bar
-        self.statusBar().showMessage("Sẵn sàng")
+        # No QStatusBar. It was a second one-line message strip directly under the first
+        # one in the action bar - 19px of window spent saying what the line above it was
+        # already there to say. Messages now land at the right end of the action bar.
 
     def _build_live_card(self) -> QWidget:
         """The video, with a header that names the source and a footer that acts on it."""
@@ -258,60 +240,120 @@ class MainWindow(QMainWindow):
         wl.setContentsMargins(1, 0, 1, 0)
         wl.addWidget(self.video)
         lay.addWidget(video_wrap, 1)
-
-        lay.addWidget(self._build_quick_bar())
         return card
+
+    #: Width the control panel keeps whatever the window does. Measured on a real screen,
+    #: not offscreen: at 125% scaling the widest page (Zones) needs 386 logical px, so 410
+    #: clears every tab with room for the tab frame and a vertical scroll bar.
+    #:
+    #: Measure this on a REAL display if it ever needs revisiting. An offscreen Qt session
+    #: reports different - here, much larger - minimum widths than the same widgets laid out
+    #: on a scaled screen, and sizing the panel from those numbers costs the video a third
+    #: of the window for nothing. F9 folds the panel away when the picture matters more.
+    SIDE_PANEL_W = 410
 
     def _build_side_panel(self) -> QWidget:
         self.tabs = QTabWidget()
+        # Seven tabs at the app-wide tab padding want 489 px; the panel is 410. Nothing
+        # warned about it - the tab bar simply cut the last tab in half, so "Ghi hình"
+        # was there but unreachable. Tighter padding here only, by object name: the
+        # sub-tabs inside a page have shorter labels and do not need the squeeze.
+        self.tabs.setObjectName("SidePanelTabs")
+        self.tabs.tabBar().setObjectName("SidePanelTabBar")
         self.tabs.addTab(self.status_panel, "Overview")
         self.tabs.addTab(self.camera_cfg, "Camera")
         self.tabs.addTab(self.event_monitor, "AI Events")
         self.tabs.addTab(self.ai_cfg, "AI Model")
         self.tabs.addTab(self.roi_panel, "Zones")
         self.tabs.addTab(self.plc_cfg, "PLC")
-        self.tabs.addTab(self.events_widget, "History")
-        self.tabs.setMinimumWidth(420)
+        self.tabs.addTab(self.storage_cfg, "Lưu trữ")
+        # Every page has to fit the panel's fixed width; none of them may ask the operator
+        # to drag a horizontal scroll bar to find out which setting a value belongs to.
+        # Done here rather than in each page so a tab added later is covered too.
+        for index in range(self.tabs.count()):
+            fit_narrow_panel(self.tabs.widget(index))
+        self.tabs.setFixedWidth(self.SIDE_PANEL_W)
         self.tabs.setDocumentMode(True)
         self.tabs.tabBar().setExpanding(False)
         self.tabs.tabBar().setElideMode(Qt.TextElideMode.ElideNone)
         self.tabs.tabBar().setUsesScrollButtons(False)
-        return self.tabs
 
-    def _build_quick_bar(self) -> QWidget:
-        bar = QFrame()
-        bar.setProperty("class", "toolbar")
-        lay = QHBoxLayout(bar)
-        lay.setContentsMargins(12, 8, 12, 8)
-        lay.setSpacing(6)
+        # The collapse handle lives OUTSIDE the panel it collapses - put it inside and
+        # folding the panel away takes the only way back with it.
+        holder = QWidget()
+        lay = QHBoxLayout(holder)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(0)
+        self.btn_panel = QPushButton("▶")
+        self.btn_panel.setFixedWidth(16)
+        self.btn_panel.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Expanding)
+        self.btn_panel.setFlat(True)
+        self.btn_panel.clicked.connect(lambda: self.toggle_side_panel())
+        lay.addWidget(self.btn_panel)
+        lay.addWidget(self.tabs)
+        self._sync_panel_button()
+        return holder
 
-        lay.addWidget(caption("CAMERA"))
+    def toggle_side_panel(self, collapse: bool | None = None) -> None:
+        """Fold the control panel to the right edge so the video has the whole window."""
+        if collapse is None:
+            collapse = self.tabs.isVisible()
+        self.tabs.setVisible(not collapse)
+        self._sync_panel_button()
+
+    def _sync_panel_button(self) -> None:
+        collapsed = not self.tabs.isVisible()
+        self.btn_panel.setText("◀" if collapsed else "▶")
+        self.btn_panel.setToolTip(("Mở bảng điều khiển (F9)" if collapsed
+                                   else "Thu gọn bảng điều khiển để xem hình lớn (F9)"))
+
+    def _build_controls(self) -> QWidget:
+        """Everything the operator presses, as a block on the Overview page.
+
+        Not a bar along the bottom of the window. A bar there is always visible, which
+        sounds like the safer choice, but it also permanently costs the video its bottom
+        50 px and cannot be folded away - and the whole point of F9 is to hand the picture
+        the entire window. On this page the buttons fold away with the panel that holds
+        them. F5 and F6 still start and stop with the panel shut.
+        """
+        block = QWidget()
+        outer = QVBoxLayout(block)
+        outer.setContentsMargins(0, 2, 0, 0)
+        outer.setSpacing(7)
+
+        run = QHBoxLayout()
+        run.setContentsMargins(0, 0, 0, 0)
+        run.setSpacing(6)
+        self.btn_start = _button("▶  START", "success", "", "Bắt đầu giám sát (F5)")
+        self.btn_stop = _button("■  STOP", "danger", "", "Dừng giám sát (F6)")
+        self.btn_stop.setEnabled(False)
+        self.btn_sim = _button("PLC SIM", "", "",
+                               "Bật: không cần PLC thật, mọi tín hiệu ghi vào bộ nhớ ảo của phần mềm")
+        self.btn_sim.setCheckable(True)
+        # Minimum width, not fixed: three buttons across a 410px panel have room to spare,
+        # and letting them share the row equally keeps the block aligned with the groups
+        # above it however long "PLC SIM: ON" gets in translation.
+        for b in (self.btn_start, self.btn_stop, self.btn_sim):
+            b.setMinimumHeight(34)
+            b.setMinimumWidth(72)
+            run.addWidget(b, 1)
+        outer.addLayout(run)
+
+        cam = QHBoxLayout()
+        cam.setContentsMargins(0, 0, 0, 0)
+        cam.setSpacing(6)
+        cam.addWidget(caption("CAMERA"))
         self.btn_q_connect = _button("Connect", "", "sm", "Mở kết nối tới mọi camera trong nhóm")
         self.btn_q_disconnect = _button("Disconnect", "", "sm", "Ngắt kết nối mọi camera")
         for b in (self.btn_q_connect, self.btn_q_disconnect):
-            lay.addWidget(b)
-        lay.addSpacing(6)
-        lay.addWidget(separator())
-        lay.addSpacing(6)
-
+            b.setMinimumWidth(72)
+            cam.addWidget(b, 1)
         self.btn_restore = _button("⤢  Thu nhỏ", "", "sm", "Trở lại lưới nhiều camera")
         self.btn_restore.hide()
-        lay.addWidget(self.btn_restore)
-        lay.addSpacing(8)
+        cam.addWidget(self.btn_restore)
+        outer.addLayout(cam)
 
-        self.lbl_video_hint = ElidedLabel("")
-        self.lbl_video_hint.setStyleSheet(f"color: {COLOR_TEXT_MUTED}; font-size: 9pt;")
-        lay.addWidget(self.lbl_video_hint, 1)
-        return bar
-
-    def _attach_log_handler(self) -> None:
-        handler_cls = try_import_qt_handler()
-        if handler_cls is None:
-            return
-        self._qt_log_handler = handler_cls()
-        self._qt_log_handler.setLevel(logging.INFO)
-        self._qt_log_handler.emitter.message.connect(self.log_widget.append)
-        logging.getLogger().addHandler(self._qt_log_handler)
+        return block
 
     # ================================================================== wiring
     def _wire(self) -> None:
@@ -352,7 +394,6 @@ class MainWindow(QMainWindow):
         c.area_status.connect(self._apply_area)
         c.system_state.connect(self._on_system_state)
         c.message.connect(self._show_message)
-        c.event_logged.connect(self.events_widget.add_event)
         c.rois_changed.connect(self._on_rois_changed)
         c.dropped_frames.connect(self.status_panel.set_dropped)
 
@@ -398,14 +439,10 @@ class MainWindow(QMainWindow):
         self.io_test.write_requested.connect(c.plc_manual_write)
         self.io_test.read_requested.connect(c.plc_manual_read)
 
-        # events
-        self.events_widget.refresh_requested.connect(
-            lambda: self.events_widget.set_events(c.events.recent(300), c.events.count()))
-        self.events_widget.export_requested.connect(
-            lambda p: self._show_message(("Exported " + p) if c.events.export_csv(p) else "Export failed"))
-        self.events_widget.clear_requested.connect(self._clear_events)
-        self.events_widget.clip_config_changed.connect(c.apply_clip_config)
-        self.events_widget.open_clips_requested.connect(self._open_clips_folder)
+
+        # storage
+        self.storage_cfg.config_applied.connect(c.apply_app_config)
+        self.storage_cfg.open_folder_requested.connect(self._open_folder)
 
         # ROI panel + video editor
         rp, v = self.roi_panel, self.video
@@ -424,7 +461,13 @@ class MainWindow(QMainWindow):
         v.roi_selected.connect(rp.select)
         v.roi_delete_requested.connect(self._delete_roi)
         v.mode_changed.connect(self._on_editor_mode)
-        v.status_message.connect(self._show_message)
+        # "Need at least 3 points to close a polygon" and friends: onto the Zones page,
+        # where someone drawing is already looking. The next set_mode overwrites it, which
+        # is the right lifetime - the warning stands until the mode it applies to ends.
+        v.status_message.connect(self.roi_panel.set_notice)
+        # Picking a camera on the Zones page zooms the picture to it; the zoom is what makes
+        # it the active camera, so the next polygon lands on it.
+        self.roi_panel.target_camera_changed.connect(self.video.set_maximized)
 
         # quick bar
         self.btn_q_connect.clicked.connect(self._quick_camera_connect)
@@ -445,7 +488,17 @@ class MainWindow(QMainWindow):
         self.appbar.set_clock(now.strftime("%H:%M:%S"), now.strftime("%d/%m/%Y"))
 
     def _show_message(self, text: str) -> None:
-        self.statusBar().showMessage(text, 10000)
+        """Transient confirmations go to the log, not to the screen.
+
+        They had a line of their own under the buttons and it earned its space poorly:
+        "YOLO loaded", "ROI configuration saved" - each one confirms an action the
+        operator just took and can see the result of. What they must not miss is not
+        transient: a failure turns its chip red, raises the alert strip and is written to
+        the log as an event. DEBUG rather than INFO so an on-site log is not doubled -
+        most of these are already logged by the subsystem that emitted them, and
+        `main.py --log-level DEBUG` brings the whole stream back when diagnosing.
+        """
+        logging.getLogger("UI").debug(text)
 
     def _quick_camera_connect(self) -> None:
         self.camera_cfg.apply_now()   # push the form values before connecting
@@ -462,9 +515,10 @@ class MainWindow(QMainWindow):
 
     # ================================================================== status slots
     def _apply_area(self, status: str) -> None:
-        caption_text = status_caption(status)
-        self.video.set_area_status(caption_text if status != "STOPPED" else "", status_color(status))
-        self.status_panel.set_area_status(status, caption_text)
+        # Only the Overview tab carries the verdict now. The video used to paint a second
+        # copy of it across the top-left of the picture, over the one thing in this window
+        # that cannot be shown anywhere else.
+        self.status_panel.set_area_status(status, status_caption(status))
 
     def _on_system_state(self, state: str, msg: str) -> None:
         self._system_state = state
@@ -480,6 +534,7 @@ class MainWindow(QMainWindow):
             self.camera_cfg.set_status(msg, ok=(state == "TEST_OK"))
             return
         self._camera_state = state
+        self._camera_message = msg
         self.camera_cfg.set_camera_state(state)
         self._update_camera_buttons(state)
         ok = None if state in (CameraState.DISCONNECTED, CameraState.CONNECTING) else state in (
@@ -552,16 +607,11 @@ class MainWindow(QMainWindow):
         self._refresh_status()
 
     def _on_editor_mode(self, mode: str) -> None:
+        # set_mode writes the drawing instructions on the Zones page itself. There used to
+        # be a second copy of them under the video, in different words - two sets of
+        # instructions for one action, and the operator reads whichever they happen to be
+        # looking at. The Zones page wins: it is the page you are on while drawing.
         self.roi_panel.set_mode(mode)
-        self.lbl_video_hint.setText({
-            "drawing": "Click thêm điểm  ·  double-click / Enter để đóng  ·  chuột phải hoàn tác  ·  Esc huỷ",
-            "edit": "Kéo đỉnh để sửa  ·  Shift+click cạnh để thêm đỉnh  ·  chuột phải xoá đỉnh  ·  Delete xoá vùng",
-        }.get(mode, self._idle_hint()))
-
-    def _idle_hint(self) -> str:
-        if self._ai_camera_mode:
-            return "Chế độ AI Camera: camera tự phát hiện người, PC chỉ nhận sự kiện. Gán vùng ở tab AI Events."
-        return "Vẽ vùng giám sát rồi nhấn START để bắt đầu."
 
     # ================================================================== AI camera mode
     def _apply_detection_mode(self, mode_value: str) -> None:
@@ -581,7 +631,6 @@ class MainWindow(QMainWindow):
         self.chip_zones.set_caption("REGIONS" if ai else "ZONES")
         provider = self.ctrl.settings.camera.ai_camera.provider_enum
         self.event_monitor.set_simulation_available(provider == EventProviderType.MOCK)
-        self.lbl_video_hint.setText(self._idle_hint())
         self.lbl_source.setText(self.camera_cfg.get_config().describe_source())
         self.video.set_display_mode("raw" if ai else self.video._display_mode)
         self._refresh_status()
@@ -596,8 +645,9 @@ class MainWindow(QMainWindow):
     def _on_active_camera(self, index: int) -> None:
         """Which camera a new zone would be drawn on."""
         cfg_now = self.ctrl.settings.camera
-        self.roi_panel.set_cameras([cfg_now.label(i) for i in range(cfg_now.camera_count)])
-        self.roi_panel.set_camera_context(cfg_now.label(index), self.video.count > 1)
+        labels = [cfg_now.label(i) for i in range(cfg_now.camera_count)]
+        self.roi_panel.set_cameras(labels)
+        self.roi_panel.set_target_camera(index, labels)
         if self.video.count <= 1:
             self.lbl_source.setText(self.ctrl.settings.camera.describe_source())
             return
@@ -654,7 +704,11 @@ class MainWindow(QMainWindow):
             CameraState.LOST: ("error", "Mất camera"),
             CameraState.ERROR: ("error", "Lỗi kết nối"),
         }.get(self._camera_state, ("off", "Chưa kết nối"))
-        self.chip_camera.set(cam[0], cam[1])
+        # The reason, not just the state. "Đang kết nối lại..." on its own sent somebody
+        # hunting for a network fault when the camera worker had been saying "serial '1'
+        # not found" all along - the answer was in the log and nowhere on the screen. The
+        # chip carries it as its tooltip, which is also what the alert strip reads.
+        self.chip_camera.set(cam[0], cam[1], self._camera_message or cam[1])
 
         if self._ai_camera_mode:
             detect = {
@@ -704,9 +758,13 @@ class MainWindow(QMainWindow):
     def _zone_chip(self) -> tuple:
         includes = [r for r in self.ctrl.roi_manager.include_rois() if r.enabled and r.is_valid()]
         excludes = [r for r in self.ctrl.roi_manager.exclude_rois() if r.enabled and r.is_valid()]
+        count = self.ctrl.settings.camera.camera_count
+        bare = count - len({int(getattr(r, "camera", 0)) for r in includes})   # cameras with no zone
         if not includes:
-            return ("warn", "Chưa vẽ vùng giám sát", "")
+            return ("ok", "Toàn khung hình (chưa vẽ vùng)", "")
         detail = f"{len(includes)} vùng" + (f" + {len(excludes)} loại trừ" if excludes else "")
+        if bare > 0:
+            detail += f" · {bare} camera toàn khung"
         dirty = self.ctrl.roi_manager.dirty
         return ("busy" if dirty else "ok", detail + (" · chưa lưu" if dirty else ""), "")
 
@@ -756,16 +814,19 @@ class MainWindow(QMainWindow):
         self.roi_panel.set_dirty(self.ctrl.roi_manager.dirty)
         self._refresh_status()
 
-    def _open_clips_folder(self) -> None:
-        folder = Path(self.ctrl.clip_directory())
-        folder.mkdir(parents=True, exist_ok=True)
-        QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder.resolve())))
+    def _open_folder(self, path: str) -> None:
+        """Show a storage folder in the file manager, creating it if it is not there yet.
 
-    def _clear_events(self) -> None:
-        if QMessageBox.question(self, "Xoá lịch sử",
-                                "Xoá toàn bộ lịch sử sự kiện?") == QMessageBox.StandardButton.Yes:
-            self.ctrl.events.clear()
-            self.events_widget.set_events([], 0)
+        A path that has only been typed into the box has no folder behind it until the
+        first file is written, and "nothing happened" is a poor answer to a button press.
+        """
+        folder = Path(path.strip() or ".")
+        try:
+            folder.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            self._show_message(f"Không mở được thư mục: {exc}")
+            return
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder.resolve())))
 
     # ================================================================== PLC / simulation
     def _plc_config_applied(self, cfg) -> None:
@@ -806,6 +867,8 @@ class MainWindow(QMainWindow):
             self.ctrl.settings.camera = self.camera_cfg.get_config()
             self.ctrl.settings.ai = self.ai_cfg.get_config()
             self.ctrl.settings.plc = self.plc_cfg.get_config()
+            app_cfg = self.storage_cfg.get_config()
+            self.ctrl.settings.app = app_cfg
             self.ctrl.cm.save_all()
             if self.ctrl.roi_manager.dirty:
                 self.ctrl.roi_manager.save()

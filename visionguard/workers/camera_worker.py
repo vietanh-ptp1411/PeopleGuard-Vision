@@ -54,8 +54,13 @@ class CameraWorker(QThread):
         self._unexpected = 0
         self._state = CameraState.DISCONNECTED
         self._want_streaming = False
+        # What the operator has asked for, as opposed to what the camera is doing. A
+        # camera that cannot be reached is only a fault if somebody wanted it connected;
+        # it is what tells the retry loop whether to keep going.
+        self._want_connected = False
         self._reconnect_attempt = 0
         self._next_retry = 0.0
+        self._unreachable_since = 0.0     # when the camera stopped answering its port (0 = it answers)
         self._last_frame_time = 0.0
         self._fps = FpsCounter()
         # Preview pacing. See _emit_preview for why this exists at all.
@@ -186,11 +191,24 @@ class CameraWorker(QThread):
 
     def _do_connect(self) -> bool:
         self._do_disconnect(silent=True)
+        self._want_connected = True
         self._set_state(CameraState.CONNECTING, "Connecting...")
         cam = self._manager.create_video_source(self._config)
+        if not cam.reachable(timeout=1.0):
+            # Same probe the retry loop uses. Without it a camera that is simply not there
+            # spent a 5 s FFmpeg open at every START - and OpenCV opens streams one at a
+            # time, so every other camera's open waited those 5 s behind it.
+            self._camera = None
+            self._fail_or_retry(cam.last_error or "not answering")
+            return False
         if not cam.connect():
             self._camera = None
-            self._set_state(CameraState.ERROR, cam.last_error or "connect failed")
+            # Into the retry loop, not into a dead end. Reconnection used to cover only a
+            # camera that had been streaming and then dropped; a camera that was already
+            # down when START was pressed went to ERROR and stayed there for ever, however
+            # long you waited and whatever you plugged back in. Restarting the whole app
+            # was the only way out, which is exactly what it looked like from outside.
+            self._fail_or_retry(cam.last_error or "connect failed")
             return False
         self._camera = cam
         self.info_changed.emit(cam.get_device_info())
@@ -198,7 +216,6 @@ class CameraWorker(QThread):
         return True
 
     def _do_disconnect(self, silent: bool = False) -> None:
-        self._want_streaming = False
         cam, self._camera = self._camera, None
         if cam is not None:
             try:
@@ -207,10 +224,23 @@ class CameraWorker(QThread):
             except Exception as exc:
                 log.warning("disconnect: %s", exc)
         self._reconnect_attempt = 0
+        if not silent:
+            # An explicit Disconnect ends the retrying too. Silent disconnects are the
+            # internal tidy-up _do_connect does before opening a new camera, and those
+            # must not cancel the intent the caller is in the middle of expressing -
+            # clearing _want_streaming here is what left a recovered camera sitting
+            # connected and blank, because _do_start had set it one line earlier.
+            self._want_connected = False
+            self._want_streaming = False
         if not silent or self._state != CameraState.DISCONNECTED:
             self._set_state(CameraState.DISCONNECTED, "Disconnected")
 
     def _do_start(self) -> None:
+        # Recorded first, before anything that can fail. START means "stream", and if the
+        # camera is unreachable right now the retry loop has to know that streaming is
+        # what it is retrying towards - otherwise it reconnects to a camera that then sits
+        # there connected and showing nothing, which is its own kind of broken.
+        self._want_streaming = True
         cam = self._camera
         if cam is None:
             if not self._do_connect():
@@ -218,13 +248,21 @@ class CameraWorker(QThread):
             cam = self._camera
         assert cam is not None
         if not cam.start():
-            self._set_state(CameraState.ERROR, cam.last_error or "start failed")
+            self._fail_or_retry(cam.last_error or "start failed")
             return
-        self._want_streaming = True
         self._buffer.clear()
         self._fps.reset()
         self._last_frame_time = time.monotonic()
         self._set_state(CameraState.STREAMING, "Streaming")
+
+    def _fail_or_retry(self, reason: str) -> None:
+        """Could not reach the camera. Keep trying if that is still what was asked for."""
+        if self._config.reconnect.enabled and self._want_connected:
+            self._reconnect_attempt = 0
+            self._schedule_retry()
+            self._set_state(CameraState.RECONNECTING, f"{reason} - retrying")
+        else:
+            self._set_state(CameraState.ERROR, reason)
 
     def _do_stop(self) -> None:
         self._want_streaming = False
@@ -341,6 +379,7 @@ class CameraWorker(QThread):
     def _on_lost(self, reason: str) -> None:
         log.error("Camera lost: %s", reason)
         self.fps_changed.emit(0.0)
+        self._unreachable_since = 0.0
         cam, self._camera = self._camera, None
         if cam is not None:
             try:
@@ -368,19 +407,58 @@ class CameraWorker(QThread):
         if rc.max_attempts and self._reconnect_attempt >= rc.max_attempts:
             self._set_state(CameraState.LOST, "Reconnect attempts exhausted")
             return
+        cam = self._manager.create_video_source(self._config)
+        if not cam.reachable(timeout=1.0):
+            # Nothing on the port: cable out, camera rebooting. Ask again in a second
+            # instead of spending a 5 s open timeout plus a 5 s back-off per attempt.
+            # Measured before this: a camera that came back was noticed up to 10 s later,
+            # and a 90 s reboot showed as ten failed attempts in the log. Probes are not
+            # attempts - they are not counted, not logged one by one, and the operator sees
+            # a running count of how long the camera has been silent.
+            if not self._unreachable_since:
+                self._unreachable_since = now
+                log.warning("Camera %d: %s - waiting for it to answer", self.index, cam.last_error)
+            silent = now - self._unreachable_since
+            self.state_changed.emit(CameraState.RECONNECTING,
+                                    f"Camera not answering for {silent:.0f}s ({cam.last_error})")
+            self._next_retry = now + 1.0
+            return
+        if self._unreachable_since:
+            log.info("Camera %d answers again after %.0fs - connecting",
+                     self.index, now - self._unreachable_since)
+            self._unreachable_since = 0.0
         self._reconnect_attempt += 1
         log.info("Camera reconnect attempt %d", self._reconnect_attempt)
-        cam = self._manager.create_video_source(self._config)
-        if cam.connect() and cam.start():
+        if cam.connect() and (cam.start() if self._want_streaming else True):
             self._camera = cam
             self._buffer.clear()
             self._last_frame_time = time.monotonic()
             self._reconnect_attempt = 0
             self.info_changed.emit(cam.get_device_info())
-            self._set_state(CameraState.STREAMING, "Reconnected")
+            if self._want_streaming:
+                self._set_state(CameraState.STREAMING, "Reconnected")
+            else:
+                # Reconnected without starting the stream, because nobody had started it:
+                # the operator pressed Connect and no more. Coming back up streaming would
+                # be the worker deciding on its own to do something it was not asked to.
+                self._set_state(CameraState.CONNECTED, cam.get_device_info().summary())
             return
+        # Release it. connect() cleans up after itself when it fails, but a camera that
+        # connected and then failed to start is still holding an open RTSP session, and
+        # leaking one per attempt every five seconds is how you run a camera out of them.
+        try:
+            cam.stop()
+            cam.disconnect()
+        except Exception:
+            pass
         self._schedule_retry()
-        self.state_changed.emit(CameraState.RECONNECTING, f"Reconnect failed ({cam.last_error}) - retry #{self._reconnect_attempt + 1}")
+        # Logged, not only signalled. Without this the log showed "reconnect attempt 7"
+        # over and over with no hint as to what went wrong on attempts 1 through 6 - the
+        # one thing anybody diagnosing this from a site log actually needs.
+        reason = cam.last_error or "unknown error"
+        log.warning("Camera reconnect attempt %d failed: %s", self._reconnect_attempt, reason)
+        self.state_changed.emit(CameraState.RECONNECTING,
+                                f"Reconnect failed ({reason}) - retry #{self._reconnect_attempt + 1}")
 
     # ------------------------------------------------------------------ helpers
     def _set_state(self, state: str, message: str = "") -> None:

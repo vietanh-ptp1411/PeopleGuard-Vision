@@ -20,15 +20,19 @@ trong.
 `Install.bat` tạo lối tắt, đăng ký tự khởi động khi đăng nhập Windows, rồi chạy kiểm tra
 hệ thống.
 
-Gói này kèm **torch 2.11.0+cu128**. Máy khách cần:
+Gói này kèm **torch 2.14.0+cu126**. Máy khách cần:
 
 - Card NVIDIA đời Turing (GTX 16xx / RTX 20xx) trở lên
-- Driver NVIDIA đủ mới cho CUDA 12.8 — driver từ 2025 trở đi là an toàn
+- Driver NVIDIA đủ mới cho CUDA 12.6 — driver từ 2025 trở đi là an toàn
 
-Gói kèm sẵn ba model và đã cấu hình dùng `yolo11s`. Đo trên GTX 1650: `yolo11s`
-tốn đúng 14 ms/khung y như `yolo11n`, nhưng trên cùng đoạn video nó chỉ bỏ sót
-người ở 7/60 khung thay vì 13/60 — cùng giá, nhìn rõ hơn. Chi tiết ở mục
-**Chọn model YOLO**.
+Gói kèm sẵn **hai model** (`model1` = YOLO26s, `model2` = YOLO26m), không phải cài thêm gì.
+Mặc định dùng `model1` ở imgsz 1280.
+Chi tiết ở mục **Chọn model YOLO**.
+
+> ⚠️ **Nếu máy khách bật Smart App Control** (Windows 11), phần mềm sẽ **không chạy được**:
+> Windows chặn các DLL của PyTorch với lỗi `WinError 4551`. Kiểm tra trước ở
+> **Windows Security → App & browser control → Smart App Control**. Tắt nó là **không thể
+> bật lại** trừ khi cài lại Windows — nên phải hỏi ý khách trước khi tắt.
 
 Nếu máy không có card hợp lệ, phần mềm vẫn chạy nhưng tự rơi về CPU (chậm hơn, vẫn dùng
 được vì bộ phát hiện đã giới hạn 12 fps).
@@ -428,55 +432,185 @@ Khoảng 5 giây là sàn thực tế của một ứng dụng YOLO trên PyTorc
 
 # Chọn model YOLO
 
-Ba model đi kèm trong `models/`. Chọn trong tab **AI Model**.
+Gói kèm **hai model** trong `models/`, chọn ở tab **AI Model**. Tên đã đổi thành
+`model1` / `model2` để ngoài hiện trường không phải đọc tên kỹ thuật — `models/README.txt`
+ghi rõ file nào là bản YOLO nào.
 
-Số liệu dưới đây **đo trên chính video công nhân nhà máy** (960×540), không trích từ bảng
-benchmark. "Khung mù" = số khung mà model không thấy ai trong khi yolo11m vẫn thấy.
+| File | Thực chất | Dung lượng | Vai trò |
+|---|---|---|---|
+| `model1.pt` | YOLO26 small — 10.0M tham số | 19 MB | **mặc định của gói này** |
+| `model2.pt` | YOLO26 medium — 21.9M tham số | 42 MB | dự phòng cho máy card mạnh |
 
-| Model | Dung lượng | CPU | **GPU (GTX 1650)** | Khung mù /60 | Bỏ sót |
-|---|---|---|---|---|---|
-| `yolo11n` | 6 MB | 54 ms | **14 ms** | **13** | 39 người |
-| `yolo11s` | 19 MB | 120 ms | **14 ms** | **7** | 25 người |
-| `yolo11m` | 41 MB | 270 ms | 28 ms | — | — |
+## Đo trên GTX 1650, khung hình thật 2688×1520
 
-## Kết luận: máy có GPU thì dùng `yolo11s`
+Toàn bộ số dưới đây đo bằng frame lấy trực tiếp từ camera Hikvision 4MP, FP32.
 
-Trên GPU, `yolo11s` chạy **nhanh đúng bằng** `yolo11n` nhưng bắt người tốt gần gấp đôi.
+| Model | imgsz 640 | imgsz 960 | imgsz 1280 |
+|---|---|---|---|
+| `model1` | 21.0 ms | 25.7 ms | **42.5 ms** |
+| `model2` | 32.0 ms | 56.7 ms | 93.6 ms |
 
-Lý do: model nano quá nhỏ để làm card bận. 14 ms đó là **chi phí cố định** — chuyển ảnh
-vào card, khởi động nhân tính toán — chứ không phải phép tính. Dùng nano trên GPU là tự
-nguyện chịu thiệt mà không đổi lại được gì.
+Cấu hình mặc định của gói: **`model1` ở imgsz 1280**, chiếm 64 % ngân sách khi chạy
+1 camera ở 15 fps.
 
-Tải thật với 3 camera × 12 fps = 36 lần suy diễn/giây:
+## Vì sao imgsz quan trọng hơn cỡ model
 
-| Model | GPU chiếm | |
+Camera 4MP cho khung 2688 pixel ngang. Hạ xuống imgsz 640 là **vứt đi 3/4 số pixel**:
+một người ở rìa xa vùng giám sát cao chừng 40 pixel sẽ còn **10 pixel** — không model nào
+cứu được, kể cả bản `x`.
+
+Nên thứ tự ưu tiên khi thấy bỏ sót người ở xa là **nâng imgsz trước, đổi model sau**.
+`model1` ở 1280 nhìn gấp 4 lần số pixel so với `model2` ở 640, mà còn rẻ hơn 10 ms.
+
+Ngược lại, nếu vùng giám sát **gần và nhỏ** (ví dụ 5×5 m, người luôn chiếm trên 150 pixel)
+thì độ phân giải không còn là chỗ tắc — lúc đó `model2` ở imgsz 640 hợp hơn: rẻ hơn
+10 ms mà có gấp đôi năng lực model để xử lý người bị che một phần, dáng cúi, ngồi, quỳ.
+
+## ⚠️ Đừng bật FP16 trên card GTX 16xx
+
+Ô **FP16 on CUDA** trong tab AI Model nghe như sẽ nhanh hơn. Trên GTX 1650 nó **chậm gấp 3**:
+
+| | FP32 | FP16 |
 |---|---|---|
-| `yolo11n` | 50 % | thừa |
-| `yolo11s` | 50 % | **thừa — nên dùng** |
-| `yolo11m` | 101 % | quá tải, sẽ rớt khung |
+| `model2` @ 640 | 32 ms | **108 ms** |
+| `model1` @ 1280 | 42 ms | **140 ms** |
 
-## Máy chỉ có CPU thì giữ `yolo11n`
-
-`yolo11s` trên CPU tốn 120 ms/khung. Với 3 camera ở 12 fps là **4,3 nhân CPU** — không
-máy công nghiệp phổ thông nào chịu nổi. `yolo11n` tốn 1,9 nhân, vừa đủ.
-
-Vì vậy **mặc định vẫn là `yolo11n`**: hai gói dùng chung file config, đổi mặc định sẽ làm
-hỏng bản CPU.
-
-## Chênh lệch chỉ lộ ra ở cảnh khó
-
-Trên video người đi bộ cận cảnh, **cả ba model cho kết quả giống hệt nhau** (60/60 khung).
-Model lớn chỉ hơn khi người ở xa, bị che khuất, hoặc góc nhìn lạ.
+GTX 16xx không có tensor core nên FP16 rơi vào đường tính chậm. Trên card **RTX** (Ampere,
+Ada) thì ngược lại — FP16 sẽ có lợi thật, nhưng **phải đo lại trên đúng máy đó**, đừng suy
+từ bảng này.
 
 ## Điều model nào cũng không sửa được
 
-Camera treo **4,5 m nhìn chéo xuống**. Mọi model YOLO đều học từ bộ ảnh COCO, mà COCO chủ
-yếu là **ảnh chụp ngang tầm mắt**. Người nhìn từ trên cao trông khác hẳn — chỉ thấy đầu và
-vai, chân bị che.
+Camera treo cao nhìn chéo xuống. Mọi model YOLO đều học từ bộ ảnh COCO, mà COCO chủ yếu là
+**ảnh chụp ngang tầm mắt**. Người nhìn từ trên cao trông khác hẳn — chỉ thấy đầu và vai.
 
-Lên model lớn hơn giúp được một phần nhưng **không xoá được** khoảng cách này. Cách duy
-nhất trả lời dứt điểm: quay vài phút video từ **đúng vị trí camera đã lắp**, rồi chạy lại
-phép đo trên đoạn video đó.
+Ba thứ ảnh hưởng nhiều hơn việc đổi model:
+
+- **Ngược sáng.** Người đứng trước cửa sổ thành bóng đen. Bật **WDR** trên web camera
+  (Configuration → Image → Backlight Settings), không phải sửa ở phần mềm.
+- **Góc lắp.** Nghiêng 30–40° là vùng tốt. Vượt 45–50° thì thành nhìn thẳng đỉnh đầu.
+- **Người quá nhỏ trong khung.** Đặt xa quá hoặc góc quá rộng thì không còn pixel để nhận.
+
+Cách trả lời dứt điểm: quay vài phút video từ **đúng vị trí camera đã lắp**, rồi chạy lại
+phép đo trên đoạn đó.
+
+---
+
+# Tab Lưu trữ — ảnh, clip, lịch sử, nhật ký
+
+Gom toàn bộ cấu hình lưu trữ vào một chỗ: **lưu ở đâu, chất lượng nào, giữ bao nhiêu ngày**.
+
+| Nhóm | Điều chỉnh |
+|---|---|
+| **Nơi lưu** | Thư mục cho ảnh, clip, nhật ký, file SQLite. Hiện dung lượng ổ còn trống |
+| **Ảnh sự kiện** | Bật/tắt, chất lượng JPEG, số ngày giữ |
+| **Video clip** | Clip ngắn quanh lúc có người: giây trước/sau, cỡ hình, số ngày, trần GB |
+| **Lịch sử & nhật ký** | Số ngày giữ sự kiện và log, trần số dòng |
+
+**Ảnh chỉ lưu khi có người VÀO vùng**, một ảnh cho mỗi lần — không phải mỗi khung hình.
+Ảnh toàn khung 2688×1520 ở chất lượng 90 nặng khoảng **580 KB**. Hạ chất lượng xuống 80
+giảm được chừng 40 % mà vẫn đủ rõ để xét lại sự kiện.
+
+> **Nếu thấy hàng chục ảnh trong vài phút**, đó gần như chắc chắn là **tín hiệu nhấp nháy**
+> chứ không phải người ra vào thật. Xem mục `off_delay` bên dưới.
+
+## `off_delay` — đừng để dưới 500 ms
+
+Trong tab **AI Model** có `off delay`. Đặt quá ngắn (100 ms) thì chỉ cần YOLO trượt một hai
+khung — chuyện thường khi người bị che nửa giây — là vùng bị tuyên bố trống rồi lại có
+người ngay. Đo thực tế với `off_delay = 100 ms`:
+
+```
+13:36:04.941  PERSON_ENTERED
+13:36:05.315  PERSON_LEFT      (+374 ms)
+13:36:05.715  PERSON_ENTERED   (+400 ms)
+13:36:06.155  PERSON_LEFT      (+440 ms)
+```
+
+Bốn lần vào/ra trong 1,2 giây. Mỗi lần là **một lệnh ghi thật xuống PLC** — máy vừa dừng đã
+chạy, chạy rồi lại dừng. Với tín hiệu bảo vệ người thì không chấp nhận được.
+
+**Để `off_delay` khoảng 500–1000 ms.** Người rời vùng thật thì chậm 1 giây không sao; đầu
+ra PLC nhấp nháy thì nguy hiểm hơn nhiều.
+
+# Camera mất kết nối — phần mềm tự vào lại
+
+Camera rớt (rút cáp, mất điện camera, switch reset) thì phần mềm **tự thử lại mãi** theo
+nhịp 1s → 2s → 5s cho tới khi vào được. Không cần bấm gì, không cần khởi động lại app.
+
+Trước bản này, vòng thử lại **chỉ chạy cho camera đang stream rồi mới rớt**. Còn camera đã
+chết sẵn lúc bấm START — hoặc lúc bấm Connect lại sau đó — thì vào trạng thái `ERROR` và
+**đứng im vĩnh viễn**: đợi bao lâu, cắm lại cáp thế nào cũng không tự vào, chỉ khởi động lại
+app mới được. Đã sửa: mọi lần không vào được camera đều đi vào vòng thử lại, miễn là người
+dùng vẫn đang muốn kết nối. Bấm **Disconnect** thì mới dừng thử.
+
+Kiểm chứng đủ 4 giai đoạn: bấm START lúc camera chết → tự vào khi camera lên → rút cáp lúc
+đang stream → tự vào lại khi cắm lại. Không khởi động lại app ở bước nào.
+
+**Lý do thất bại hiện ngay trên màn hình.** Ô CAMERA và thanh cảnh báo vàng ghi rõ vì sao,
+không chỉ "Đang kết nối lại...". Log ghi từng lần thử kèm nguyên nhân:
+
+```
+WARNING | CAMERA | Camera reconnect attempt 3 failed: Cannot open stream rtsp://... 
+```
+
+---
+
+# Camera công nghiệp Hikrobot (MVS)
+
+Ngoài camera IP qua RTSP, phần mềm chạy được **camera công nghiệp Hikrobot** (GigE Vision /
+USB3 Vision) qua MVS SDK — chọn `Hikrobot (MVS)` ở ô **Camera Type** trong tab Camera.
+
+**Chỉ cần cài MVS của Hikrobot rồi mở lại phần mềm.** Không phải thêm `PYTHONPATH` gì cả:
+phần mềm tự tìm thư mục `MvImport` theo thứ tự
+
+1. biến môi trường `MVCAM_COMMON_RUNENV` (MVS tự đặt khi cài)
+2. `MVCAM_SDK_PATH`
+3. `C:\Program Files (x86)\MVS\Development\Samples\Python\MvImport`
+4. thư mục `MvImport` đặt cạnh file exe — dùng khi máy khách không cài được MVS
+
+Đường dẫn tìm được ghi vào log lúc khởi động (`Hikrobot MVS binding: ... (dll: ...)`) — chỗ
+để xem khi máy có nhiều bản MVS.
+
+> **Ghi chú kỹ thuật:** bản đóng gói **không tìm DLL theo PATH được**. MVS đặt
+> `MvCameraControl.dll` ở `Common Files\MVS\Runtime\Win64_x64` và thêm vào PATH, nhưng
+> bootloader của PyInstaller gọi `SetDefaultDllDirectories`, và lệnh đó **loại PATH khỏi thứ
+> tự tìm DLL**. Chạy từ source thì được, đóng gói thì báo `Failed to load dynlib/dll
+> 'MvCameraControl.dll'` — nghe như lỗi đóng gói, thực ra là PATH. Phần mềm nạp sẵn DLL này
+> theo đường dẫn tuyệt đối trước khi gọi SDK, nên không phải làm gì thêm.
+
+Đo trên MV-CE050-30GM (GigE, 5MP đơn sắc): **2592×1944 @ 14 fps**, ảnh đơn sắc được đổi sang
+3 kênh trước khi vào YOLO nên nhận người bình thường.
+
+> Camera GigE cắm trực tiếp vào PC sẽ nhận IP dạng `169.254.x.x` (không có DHCP) — vẫn chạy,
+> không cần sửa gì. Đặt IP tĩnh cùng dải nếu muốn nó lên nhanh hơn.
+
+Vùng ROI lưu ở **toạ độ tương đối 0–1**, nên đổi camera không làm mất vùng — nhưng khung
+4:3 của camera công nghiệp khác 16:9 của camera IP, hình sẽ lệch tỉ lệ so với vùng đã vẽ.
+Đổi camera thì nên vẽ lại vùng.
+
+---
+
+# Giao diện — vài điểm khác so với bản cũ
+
+- **Không còn tab History.** Sổ sự kiện `events.db` vẫn ghi đầy đủ và ảnh vẫn lưu, chỉ là
+  không còn bảng xem trong app.
+- **Không còn tab Ghi hình** (ghi video 24/7 vào ổ cứng) và không còn cần ffmpeg. Muốn lưu
+  video liên tục thì dùng đầu ghi NVR hoặc thẻ nhớ của camera — đó là việc của thiết bị ghi,
+  không phải của phần mềm giám sát. Clip theo sự kiện ở tab **Lưu trữ** vẫn còn.
+- **Không còn khung SYSTEM LOG** dưới màn hình. Nhật ký vẫn ghi vào `logs\<ngày>.log`,
+  mở bằng Notepad khi cần.
+- **Khung hình cố định**, không kéo được nữa — màn hình đặt ngoài xưởng hay bị tì tay làm
+  lệch, kéo xong không ai biết cách trả về.
+- **Nút thu gọn bảng điều khiển** (dải mảnh bên trái các tab, hoặc phím **F9**): gập panel
+  sang phải để xem hình lớn. Trên màn 1900px, khung hình tăng từ 1385 lên **1855 px**.
+- **START / STOP / PLC SIM và Connect / Disconnect nằm ở đáy tab Overview**, không còn
+  thanh nút riêng. Đổi lại khung hình chạy thẳng tới mép dưới cửa sổ (cao thêm 16%).
+  Hệ quả: gập panel bằng F9, hoặc đang mở tab khác, thì không thấy nút — **F5 chạy,
+  F6 dừng** vẫn dùng được mọi lúc.
+- **Không còn thanh trạng thái ở đáy cửa sổ.** Các câu xác nhận kiểu "đã lưu cấu hình"
+  giờ chỉ ghi vào log ở mức DEBUG (`main.py --log-level DEBUG` để xem). Lỗi thật thì
+  không đi đường đó: ô trạng thái đổi đỏ, thanh cảnh báo hiện lên, và log ghi lại.
 
 ---
 

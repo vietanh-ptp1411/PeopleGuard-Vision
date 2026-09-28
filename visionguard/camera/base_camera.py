@@ -105,6 +105,15 @@ class BaseCamera(abc.ABC):
         """Return the next frame or None if no frame is available within `timeout`."""
 
     # -- state ----------------------------------------------------------------
+    def reachable(self, timeout: float = 1.0) -> bool:
+        """Cheap check that the device is there at all, before a full connect is tried.
+
+        A full connect can take its whole open timeout to fail (5 s against a camera that is
+        not answering). Sources that can tell faster - a network camera is a TCP port -
+        override this; the default says yes and lets connect() find out.
+        """
+        return True
+
     def is_connected(self) -> bool:
         return self._connected
 

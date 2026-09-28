@@ -134,6 +134,7 @@ class SystemController(QObject):
         self._start_detection_when_loaded = False
         self._autostart_pending = False
         self._got_data_since_start = False
+        self._all_video_since_start = False
         # AI camera mode
         self._event_channel = EventChannelState.DISCONNECTED
         self._event_message = ""
@@ -186,10 +187,15 @@ class SystemController(QObject):
             log.info("Detection mode: PC AI / YOLO")
             for ev in self.event_workers:
                 ev.request_disable()
-            if self.settings.ai.detector.auto_load_on_start:
-                self.load_model()
         if self.settings.plc.simulation_mode:
             self.plc_connect()   # harmless: virtual PLC
+        # The model load starts now, before the window exists, on the inference thread.
+        # Both orders were measured on the 12-core dev PC with four cameras. Loading first
+        # slows the window (importing torch holds the GIL): shown at 3.8 s instead of 2.3 s.
+        # Window first delays the load by the same 2.3 s and START came a second later
+        # overall (11 s against 10 s). START is what protects the machine, so it wins;
+        # the picture follows within two seconds either way.
+        self.preload_model()
 
     # ================================================================== camera group
     @property
@@ -245,17 +251,6 @@ class SystemController(QObject):
         self.inference_worker.set_sources(list(zip(self.buffers, self.pipelines)))
         self.inference_worker.set_max_fps(self.settings.ai.detector.max_fps)
         self._sync_recorders()
-
-    def apply_clip_config(self, clip) -> None:
-        """Turn clip recording on or off, or retune it, without a restart."""
-        self.settings.app.clip = clip
-        self.cm.save("app")
-        self._sync_recorders()
-        housekeeping.run_in_background(self.settings.app, self.events)
-        self.message.emit("Ghi video: " + ("BẬT" if clip.enabled else "TẮT"))
-
-    def clip_directory(self) -> str:
-        return self.settings.app.clip.directory
 
     def _sync_recorders(self) -> None:
         """One recorder per camera while recording is on, none at all while it is off.
@@ -479,8 +474,14 @@ class SystemController(QObject):
             self.start_system()
             return
 
+        # Cameras first, and now. They take no part in the model load, so there is no
+        # reason for the picture to wait for it: connect and stream while torch comes up,
+        # and START then finds every camera already running. Before this the cameras were
+        # only asked for at START, so the last of four came on screen 15 s after launch.
+        self.camera_start()
+
         timeout = max(1.0, float(self.settings.app.autostart_timeout_s))
-        log.info("Auto-start: waiting for the model, and starting anyway in %.0fs", timeout)
+        log.info("Auto-start: cameras starting; waiting for the model, and starting anyway in %.0fs", timeout)
         self._autostart_pending = True
 
         def _go(reason: str) -> None:
@@ -610,9 +611,28 @@ class SystemController(QObject):
         else:
             self.message.emit("AI settings saved")
 
+    #: Preview rate while the model loads. Importing torch holds the GIL for most of its
+    #: 2.5 s and so does every preview frame the UI paints; with four cameras at 20 fps the
+    #: UI thread got the GIL back so fast the loader barely ran - the same load measured
+    #: 3 s with the cameras idle and 19 s with them streaming. A few frames a second keeps
+    #: the picture alive and gives the loader the thread time it needs.
+    LOADING_PREVIEW_FPS = 3.0
+
+    def _set_preview_fps(self, fps: float) -> None:
+        for w in {id(w): w for w in [self.camera_worker, *self.camera_workers]}.values():
+            w.set_preview_fps(fps)
+
     def load_model(self) -> None:
         self.model_status.emit(False, "Loading model...")
+        self._set_preview_fps(self.LOADING_PREVIEW_FPS)
         self.inference_worker.request_load_model(self.settings.ai.detector)
+
+    def preload_model(self) -> None:
+        """Start loading the model in the background, if the settings ask for that."""
+        if self.ai_camera_mode or self._model_loaded:
+            return
+        if self.settings.ai.detector.auto_load_on_start:
+            self.load_model()
 
     def start_detection(self) -> None:
         if not self._model_loaded:
@@ -694,9 +714,22 @@ class SystemController(QObject):
 
     # ================================================================== app config
     def apply_app_config(self, cfg: AppConfig) -> None:
+        """Take the whole storage page live: folders, quality and every retention rule.
+
+        Clip recording owns a thread and a frame ring per camera, so it has to be re-synced
+        rather than merely stored; housekeeping is run at once because somebody who has just
+        shortened a retention rule expects the disk to shrink now, not in six hours.
+        """
+        was_recording = self.settings.app.clip.enabled
         self.settings.app = cfg
         self.cm.save("app")
         self.snapshots.set_config(cfg.snapshot)
+        self._sync_recorders()
+        self._housekeeping.setInterval(int(max(0.25, cfg.retention.interval_hours) * 3600_000))
+        housekeeping.run_in_background(cfg, self.events)
+        if cfg.clip.enabled != was_recording:
+            self.message.emit("Ghi video: " + ("BẬT" if cfg.clip.enabled else "TẮT"))
+
 
     # ================================================================== system
     @property
@@ -708,10 +741,11 @@ class SystemController(QObject):
             return
         ai_mode = self.ai_camera_mode
         if not ai_mode and not self.roi_manager.include_rois():
-            self.message.emit("Warning: no INCLUDE ROI defined - the area will never be OCCUPIED")
+            self.message.emit("No zone drawn - the whole picture of every camera is the monitored area")
         self._system_running = True
         self._start_time = time.monotonic()
         self._got_data_since_start = False
+        self._all_video_since_start = False
         self._ai_error = ""
         log.info("SYSTEM START requested (%s)", self.detection_mode.label)
         self._log_event(EventType.SYSTEM_START,
@@ -898,6 +932,7 @@ class SystemController(QObject):
 
     def _on_model_loaded(self, info) -> None:
         self._model_loaded = True
+        self._set_preview_fps(self.settings.app.ui_fps_limit)
         self.model_status.emit(True, f"Model loaded: {info.summary()}")
         self.message.emit(f"YOLO loaded: {info.summary()}")
         if self._start_detection_when_loaded:
@@ -907,6 +942,7 @@ class SystemController(QObject):
 
     def _on_model_failed(self, msg: str) -> None:
         self._model_loaded = False
+        self._set_preview_fps(self.settings.app.ui_fps_limit)
         self._start_detection_when_loaded = False
         self._ai_error = msg
         self.model_status.emit(False, f"Model load failed: {msg}")
@@ -1058,8 +1094,15 @@ class SystemController(QObject):
             # unless a hard error is already known or the grace period is over.
             if has_data:
                 self._got_data_since_start = True
-            # the grace period is only for the very first start-up, never for a later loss
-            in_grace = (not self._got_data_since_start
+            if video_ok:
+                self._all_video_since_start = True
+            # The grace period is only for the very first start-up, never for a later loss.
+            # It ends when everything has been seen up once - the first detection result AND
+            # every camera streaming - not at the first result alone. OpenCV opens cameras one
+            # after another, so the first camera was streaming and producing results while
+            # the fourth was still connecting, and the first result used to end the grace
+            # period and turn that half-connected start-up into a FAULT for several seconds.
+            in_grace = (not (self._got_data_since_start and self._all_video_since_start)
                         and (time.monotonic() - self._start_time) < STARTUP_GRACE_S)
             hard_error = self._camera_state in (CameraState.LOST, CameraState.ERROR, CameraState.FINISHED)
             hard_error = hard_error or (self._event_channel == EventChannelState.ERROR if ai_mode

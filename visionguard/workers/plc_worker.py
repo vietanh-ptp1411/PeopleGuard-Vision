@@ -10,6 +10,7 @@ from PySide6.QtCore import QThread, Signal
 
 from ..config.schemas import PlcConfig
 from ..plc.base_plc import PlcError
+from ..plc.mitsubishi.mc_protocol import McProtocolError
 from ..plc.plc_manager import PlcManager, PlcOutputState
 
 log = logging.getLogger("PLC")
@@ -30,6 +31,8 @@ class PlcWorker(QThread):
         self._commands: "queue.Queue[Tuple[str, Any]]" = queue.Queue()
         self._running = True
         self._want_connected = False
+        #: Last protocol-level refusal, so it is reported once instead of every tick.
+        self._protocol_fault = ""
         self._pending_state: Optional[PlcOutputState] = None
         self._reconnect_attempt = 0
         self._next_retry = 0.0
@@ -129,7 +132,7 @@ class PlcWorker(QThread):
                     self._want_connected = True
                     self.connection_changed.emit(True, "Connected")
         except PlcError as exc:
-            self._on_comm_error(str(exc))
+            self._on_comm_error(exc)
             if name in ("write", "read", "test"):
                 self.io_result.emit(False, str(exc))
         except Exception as exc:
@@ -147,7 +150,7 @@ class PlcWorker(QThread):
                 for dev, val in written:
                     self.device_written.emit(dev, val)
             except PlcError as exc:
-                self._on_comm_error(str(exc))
+                self._on_comm_error(exc)
             self._emit_memory(force=True)
         else:
             self.connection_changed.emit(False, self._manager.last_error or "connect failed")
@@ -188,8 +191,12 @@ class PlcWorker(QThread):
                     self.heartbeat_toggled.emit(hb)
                     self.device_written.emit(self._manager.cfg.mapping.device_heartbeat, int(hb))
                     self._emit_memory()
+                    # Only a tick that actually wrote proves the refusal is over. Clearing
+                    # on every call instead counted the gaps between heartbeats as success
+                    # and flipped the chip green and red twice a second.
+                    self._clear_protocol_fault()
             except PlcError as exc:
-                self._on_comm_error(str(exc))
+                self._on_comm_error(exc)
             if now - self._last_latency_emit > 0.5:
                 self._last_latency_emit = now
                 self.latency_changed.emit(self._manager.latency_ms)
@@ -205,12 +212,16 @@ class PlcWorker(QThread):
                         for dev, val in self._manager.resync():
                             self.device_written.emit(dev, val)
                     except PlcError as exc:
-                        self._on_comm_error(str(exc))
+                        self._on_comm_error(exc)
                     self._emit_memory(force=True)
                 else:
                     self._schedule_retry()
 
-    def _on_comm_error(self, message: str) -> None:
+    def _on_comm_error(self, exc: Exception) -> None:
+        message = str(exc)
+        if isinstance(exc, McProtocolError):
+            self._on_protocol_fault(message)
+            return
         log.error("PLC communication error: %s", message)
         try:
             self._manager.driver.disconnect()
@@ -220,6 +231,34 @@ class PlcWorker(QThread):
         self.plc_error.emit(message)
         if self._want_connected:
             self._schedule_retry()
+
+    def _on_protocol_fault(self, message: str) -> None:
+        """The PLC answered and said no. Keep the link; do not reconnect.
+
+        An end code is not a broken connection - the socket is fine and the PLC is
+        talking to us. Dropping it and reconnecting is what turned a refused write into
+        a connect/disconnect loop on site: every reconnect succeeded (TCP was never the
+        problem), resync wrote again, got the same refusal, and tore the link down again,
+        several times a second. Reconnecting cannot fix a configuration the PLC is
+        enforcing, and the flapping hid the one line that said what was wrong.
+
+        Reported once per distinct message, because the heartbeat retries it every tick.
+        Still reported as NOT connected: writes are being refused, so the PLC is not
+        being signalled, and an operator must not read that as a working link.
+        """
+        if message == self._protocol_fault:
+            return
+        self._protocol_fault = message
+        log.error("PLC refused the request: %s", message)
+        self.connection_changed.emit(False, message)
+        self.plc_error.emit(message)
+
+    def _clear_protocol_fault(self) -> None:
+        if not self._protocol_fault:
+            return
+        self._protocol_fault = ""
+        log.info("PLC is accepting writes again")
+        self.connection_changed.emit(True, self._manager.driver.name)
 
     def _schedule_retry(self) -> None:
         if not self._manager.cfg.connection.auto_reconnect:

@@ -29,6 +29,11 @@ class McCommand(IntEnum):
 
 END_CODE_MESSAGES: Dict[int, str] = {
     0x0000: "OK",
+    # The one a commissioning engineer actually meets. The PLC is reachable, answering,
+    # and refusing every write because it is in RUN and the Ethernet parameter that
+    # permits writes while running was never ticked. Nothing on our side can fix it.
+    0x0055: ("PLC refuses writes while in RUN - tick 'Enable write at RUN time' "
+             "in the Ethernet/MC parameters in GX Works"),
     0xC050: "Communication data code mismatch (ASCII/Binary) - check GX Works 'Communication Data Code'",
     0xC051: "Too many bit device points",
     0xC052: "Too many word device points",
@@ -55,7 +60,7 @@ END_CODE_MESSAGES: Dict[int, str] = {
 class McProtocolError(PlcError):
     def __init__(self, end_code: int) -> None:
         self.end_code = end_code
-        msg = END_CODE_MESSAGES.get(end_code, "Unknown end code")
+        msg = describe_end_code(end_code)
         super().__init__(f"PLC returned end code 0x{end_code:04X}: {msg}")
 
 
@@ -212,4 +217,4 @@ class McProtocol3E:
 
 
 def describe_end_code(end_code: int) -> str:
-    return END_CODE_MESSAGES.get(end_code, "Unknown end code")
+    return END_CODE_MESSAGES.get(end_code, "Unknown end code - look it up in Mitsubishi's SLMP/MC error code list")

@@ -17,8 +17,8 @@ from ...camera.base_camera import Frame
 from ...config.schemas import VisualizationConfig
 from ...logic.occupancy_state_machine import OccupancyState
 from ...logic.pipeline import PipelineResult
-from ...roi.geometry import nearest_edge, nearest_vertex, point_in_polygon, polygon_centroid
-from ...roi.roi_model import NormPoint, Roi, RoiType
+from ...roi.geometry import nearest_edge, nearest_vertex, point_in_polygon
+from ...roi.roi_model import FULL_FRAME_ID, NormPoint, Roi, RoiType
 from ...utils.qt_image import bgr_to_qimage
 from ...vision.detection import DetectionZoneStatus, EvaluatedDetection
 from ..theme import COLOR_BORDER, COLOR_TEXT_DIM, COLOR_TEXT_MUTED, COLOR_VIDEO_BG, contrast_text
@@ -61,8 +61,6 @@ class VideoView(QWidget):
         self._display_mode = "raw"
         self._rois: Tuple[Roi, ...] = ()
         self._roi_states: Dict[str, OccupancyState] = {}
-        self._area_text = ""
-        self._area_color = COLOR_TEXT_DIM
         self._overlay_info = ""
         self._placeholder = PLACEHOLDER_YOLO
         # editor
@@ -102,8 +100,15 @@ class VideoView(QWidget):
             self._mark()
 
     def set_frame(self, frame: Frame) -> None:
-        if self._display_mode != "raw":
-            return
+        """Every camera frame goes on screen, whether or not detection is running.
+
+        The tile used to switch to showing only the frames that had been through the
+        detector once START was pressed. That capped the picture at the inference rate -
+        8 fps per camera, and less with four cameras sharing one GPU - and put the whole
+        inference round trip between the camera and the screen. The camera streams at
+        20 fps and its frames are already arriving here; the boxes from the newest result
+        are painted over the live picture instead, at most one inference behind it.
+        """
         self._set_image(frame.image)
 
     def set_result(self, result: PipelineResult) -> None:
@@ -111,7 +116,7 @@ class VideoView(QWidget):
             return
         self._result = result
         self._roi_states = dict(result.roi_states)
-        self._set_image(result.frame.image)
+        self._mark()
 
     def clear_result(self) -> None:
         self._result = None
@@ -130,11 +135,6 @@ class VideoView(QWidget):
             self.roi_selected.emit("")
         self._mark()
 
-    def set_area_status(self, text: str, color: str) -> None:
-        self._area_text = text
-        self._area_color = color
-        self._mark()
-
     def set_overlay_info(self, text: str) -> None:
         self._overlay_info = text
         self._mark()
@@ -147,7 +147,13 @@ class VideoView(QWidget):
     def _set_image(self, image) -> None:
         self._image = bgr_to_qimage(image)
         self._img_h, self._img_w = image.shape[:2]
-        self._mark()
+        # Repaint now, not at the next tick of the timer. Frames arrive every 50 ms and the
+        # timer fires every 33 ms; the two beat against each other, so some frames were on
+        # screen for 33 ms and others for 66 ms, which reads as stutter in a steady 20 fps
+        # stream. The camera worker already paces what it sends to ui_fps_limit and Qt
+        # folds repeated update() calls into one paint, so this cannot flood the UI.
+        self._dirty = False
+        self.update()
 
     def _mark(self) -> None:
         self._dirty = True
@@ -422,6 +428,13 @@ class VideoView(QWidget):
     def paintEvent(self, _ev) -> None:  # noqa: N802
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        # Antialiasing covers the shapes we draw; it does nothing for the picture itself.
+        # Without this second hint Qt scales the frame nearest-neighbour, which on a tile
+        # showing 1280x720 in 660x371 throws away three of every four pixels and picks the
+        # survivor by position - edges crawl and the whole image shimmers as things move.
+        # Measured cost of the smooth path: 1.32 ms a frame against 0.47, which across
+        # four cameras at 20 fps is 7% of one core for a picture that stops flickering.
+        p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
         p.fillRect(self.rect(), QColor(COLOR_VIDEO_BG))
         if self._image is None:
             self._paint_placeholder(p)
@@ -436,7 +449,7 @@ class VideoView(QWidget):
             if self._result is not None:
                 self._paint_detections(p, self._result.evaluation.detections)
             self._paint_draft(p)
-        self._paint_banner(p)
+        self._paint_overlay_info(p)
         p.end()
 
     def _paint_placeholder(self, p: QPainter) -> None:
@@ -455,8 +468,29 @@ class VideoView(QWidget):
         p.drawText(QRectF(r.x(), r.y() + r.height() * 0.5, r.width(), r.height() * 0.5),
                    Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop, self._placeholder)
 
+    def _paint_full_frame(self, p: QPainter) -> None:
+        """No include zone on this camera: show that the whole picture is being watched.
+
+        Without this the tile looked exactly like a camera nobody had set up yet, while the
+        processor was treating every pixel of it as the zone. The outline hugs the picture
+        and turns red like any zone when somebody is in it.
+        """
+        st = self._roi_states.get(FULL_FRAME_ID)
+        occupied = st is not None and st.occupied
+        color = QColor(self.vis.color_roi_include_occupied if occupied else self.vis.color_roi_include)
+        rect = self.target_rect().adjusted(2, 2, -2, -2)
+        p.setPen(QPen(color, max(1, int(self.vis.line_width)) + 1, Qt.PenStyle.DashLine))
+        fill = QColor(color)
+        fill.setAlpha(30 if occupied else 0)
+        p.setBrush(QBrush(fill))
+        p.drawRect(rect)
+        self._draw_label(p, QPointF(rect.x() + 3, rect.y() + 3), ["TOÀN KHUNG HÌNH"], color, tiny=True)
+
     def _paint_rois(self, p: QPainter) -> None:
         lw = max(1, int(self.vis.line_width))
+        has_include = any(r.is_include and r.enabled and r.is_valid() for r in self._rois)
+        if self._display_mode == "result" and self._image is not None and not has_include:
+            self._paint_full_frame(p)
         # exclusions first so include outlines stay visible on top
         ordered = [r for r in self._rois if r.is_exclude] + [r for r in self._rois if r.is_include]
         for roi in ordered:
@@ -487,17 +521,25 @@ class VideoView(QWidget):
                 p.drawPolygon(poly)
             else:
                 p.drawPolyline(poly)
-            # label
-            cx, cy = polygon_centroid(pts)
-            lab = self.to_widget(cx, cy)
-            st = self._roi_states.get(roi.id)
-            tag = roi.type.label.upper() if roi.is_exclude else (st.value if st else "")
-            lines = [f"{roi.id}  {roi.name}" + (f"  [{roi.plc_device}]" if roi.plc_device else "")]
-            if tag:
-                lines.append(tag)
+            # Label in the zone's top-left corner, not its middle. A tag in the middle
+            # sits exactly where people walk, so it covers the thing the camera is watching.
+            #
+            # It carries the NAME only. The occupancy state used to be on it as well
+            # ("CLEAR" / "OCCUPIED"), which the red PERSON DETECTED banner and the zone's
+            # own fill colour already say twice over - three ways of saying the same thing,
+            # and the one in the middle of the picture was the only one in the way.
+            #
+            # One identifier, not two: the default name is the id with the underscore taken
+            # out, so printing both put "ROI_001  ROI 001" on the picture. The id is still
+            # in the Zones panel and in every event row.
+            title = roi.name.strip() or roi.id
+            lines = [title + (f"  [{roi.plc_device}]" if roi.plc_device else "")]
+            if roi.is_exclude:
+                lines.append(roi.type.label.upper())   # type, not state - colour alone is subtle
             if not roi.enabled:
-                lines.append("DISABLED")
-            self._draw_label(p, lab, lines, color, centered=True, small=True)
+                lines.append("DISABLED")               # a dotted outline is easy to miss
+            corner = poly.boundingRect().topLeft()
+            self._draw_label(p, QPointF(corner.x() + 3, corner.y() + 3), lines, color, tiny=True)
             # vertices
             if selected or self._mode == EditorMode.EDIT:
                 vr = 5 if selected else 3
@@ -562,41 +604,34 @@ class VideoView(QWidget):
                 lines = [f"Person {ident}{conf}"]
             self._draw_label(p, QPointF(rect.left(), rect.top() - 4), lines, color, above=True)
 
-    def _paint_banner(self, p: QPainter) -> None:
-        if not self._area_text:
+    def _paint_overlay_info(self, p: QPainter) -> None:
+        """The system message, and nothing else, in the top-left corner.
+
+        A big AREA CLEAR / PERSON DETECTED banner used to sit here. The Overview tab shows
+        the same verdict in the same words and at the same size, so the one on the picture
+        was a second copy - painted over the only thing in the window that cannot be put
+        somewhere else. The zone still turns red and the person still gets a PERSON IN AREA
+        box, so nothing was lost from the video itself, only the duplicate.
+        """
+        if not self._overlay_info:
             return
-        f = QFont()
-        f.setPointSize(max(11, min(20, self.width() // 55)))
-        f.setBold(True)
-        p.setFont(f)
-        metrics = p.fontMetrics()
-        text = self._area_text
-        w = metrics.horizontalAdvance(text) + 28
-        h = metrics.height() + 12
-        rect = QRectF(12, 12, w, h)
-        bg = QColor(self._area_color)
-        bg.setAlpha(225)
-        p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(QBrush(bg))
-        p.drawRoundedRect(rect, 6, 6)
-        p.setPen(QColor(contrast_text(self._area_color)))
-        p.drawText(rect, Qt.AlignmentFlag.AlignCenter, text)
-        if self._overlay_info:
-            sf = QFont()
-            sf.setPointSize(9)
-            p.setFont(sf)
-            self._draw_label(p, QPointF(12, rect.bottom() + 6), self._overlay_info.split("\n"), QColor(COLOR_TEXT_DIM), small=True)
+        sf = QFont()
+        sf.setPointSize(9)
+        p.setFont(sf)
+        self._draw_label(p, QPointF(12, 12), self._overlay_info.split(chr(10)),
+                         QColor(COLOR_TEXT_DIM), small=True)
 
     def _draw_label(self, p: QPainter, pos: QPointF, lines: List[str], color: QColor, *, above: bool = False,
-                    centered: bool = False, small: bool = False) -> None:
+                    centered: bool = False, small: bool = False, tiny: bool = False) -> None:
         f = QFont()
-        f.setPointSize(8 if small else 9)
+        f.setPointSize(7 if tiny else (8 if small else 9))
         f.setBold(True)
         p.setFont(f)
         metrics = p.fontMetrics()
-        w = max(metrics.horizontalAdvance(t) for t in lines) + 10
+        pad = 4 if tiny else 10
+        w = max(metrics.horizontalAdvance(t) for t in lines) + pad
         lh = metrics.height()
-        h = lh * len(lines) + 6
+        h = lh * len(lines) + (2 if tiny else 6)
         x, y = pos.x(), pos.y()
         if above:
             y -= h
@@ -612,5 +647,10 @@ class VideoView(QWidget):
         p.setBrush(QBrush(bg))
         p.drawRoundedRect(rect, 3, 3)
         p.setPen(QColor(contrast_text(color.name())))
+        # `centered` used to centre only the box, leaving the text ragged against its left
+        # edge - which reads as a misplaced label rather than a centred one.
+        align = (Qt.AlignmentFlag.AlignHCenter if centered else Qt.AlignmentFlag.AlignLeft)
+        inset = pad / 2
         for i, t in enumerate(lines):
-            p.drawText(QRectF(x + 5, y + 3 + i * lh, w - 10, lh), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, t)
+            p.drawText(QRectF(x + inset, y + (1 if tiny else 3) + i * lh, w - pad, lh),
+                       align | Qt.AlignmentFlag.AlignVCenter, t)

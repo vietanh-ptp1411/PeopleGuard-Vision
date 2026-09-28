@@ -38,24 +38,28 @@ class IoTestWidget(QWidget):
 
         g_manual = QGroupBox("MANUAL DEVICE ACCESS")
         gl = QGridLayout(g_manual)
+        # Two columns, not four. This panel is a fixed 470 px wide; a four-column row of
+        # label-field-label-field needed 596 and put a horizontal scroll bar under the whole
+        # window, which scrolls the LABELS out of sight and leaves values with no names.
         gl.addWidget(QLabel("Device"), 0, 0)
         self.edt_device = QLineEdit("M100")
         self.edt_device.textChanged.connect(self._validate)
         gl.addWidget(self.edt_device, 0, 1)
-        gl.addWidget(QLabel("Value"), 0, 2)
+        gl.addWidget(QLabel("Value"), 1, 0)
         self.spn_value = QSpinBox()
         self.spn_value.setRange(0, 65535)
-        gl.addWidget(self.spn_value, 0, 3)
+        gl.addWidget(self.spn_value, 1, 1)
         self.btn_on = QPushButton("Write ON (1)")
         self.btn_on.setProperty("class", "success")
         self.btn_off = QPushButton("Write OFF (0)")
         self.btn_off.setProperty("class", "danger")
         self.btn_write = QPushButton("Write Value")
         self.btn_read = QPushButton("Read")
-        gl.addWidget(self.btn_on, 1, 0)
-        gl.addWidget(self.btn_off, 1, 1)
-        gl.addWidget(self.btn_write, 1, 2)
-        gl.addWidget(self.btn_read, 1, 3)
+        gl.addWidget(self.btn_on, 2, 0)
+        gl.addWidget(self.btn_off, 2, 1)
+        gl.addWidget(self.btn_write, 3, 0)
+        gl.addWidget(self.btn_read, 3, 1)
+        gl.setColumnStretch(1, 1)
         lay.addWidget(g_manual)
 
         self.g_quick = QGroupBox("QUICK ACCESS (mapped devices)")
@@ -115,27 +119,29 @@ class IoTestWidget(QWidget):
         for label, dev, is_bit in rows:
             if not dev:
                 continue
+            # Name on its own row, buttons under it. Side by side, the name ("Person /
+            # Occupied  M100") plus three buttons came to 596 px - wider than the panel.
             lbl = QLabel(f"{label}  <b>{dev}</b>")
-            self.quick_layout.addWidget(lbl, r, 0)
+            self.quick_layout.addWidget(lbl, r, 0, 1, 3)
             self._quick_buttons.append(lbl)
             if is_bit:
                 b_on = QPushButton("ON")
                 b_off = QPushButton("OFF")
                 b_on.clicked.connect(lambda _=False, d=dev: self.write_requested.emit(d, 1))
                 b_off.clicked.connect(lambda _=False, d=dev: self.write_requested.emit(d, 0))
-                self.quick_layout.addWidget(b_on, r, 1)
-                self.quick_layout.addWidget(b_off, r, 2)
+                self.quick_layout.addWidget(b_on, r + 1, 0)
+                self.quick_layout.addWidget(b_off, r + 1, 1)
                 self._quick_buttons += [b_on, b_off]
             else:
                 b_w = QPushButton("Write value")
                 b_w.clicked.connect(lambda _=False, d=dev: self.write_requested.emit(d, self.spn_value.value()))
-                self.quick_layout.addWidget(b_w, r, 1, 1, 2)
+                self.quick_layout.addWidget(b_w, r + 1, 0, 1, 2)
                 self._quick_buttons.append(b_w)
             b_rd = QPushButton("Read")
             b_rd.clicked.connect(lambda _=False, d=dev: self.read_requested.emit(d))
-            self.quick_layout.addWidget(b_rd, r, 3)
+            self.quick_layout.addWidget(b_rd, r + 1, 2)
             self._quick_buttons.append(b_rd)
-            r += 1
+            r += 2
 
     def append_result(self, ok: bool, message: str) -> None:
         ts = datetime.now().strftime("%H:%M:%S.%f")[:-3]

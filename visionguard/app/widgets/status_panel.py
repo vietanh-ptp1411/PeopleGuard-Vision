@@ -86,6 +86,21 @@ class StatusPanel(QWidget):
         self.info_label.setStyleSheet(f"color: {COLOR_TEXT_MUTED}; font-size: 9pt;")
         lay.addWidget(self.info_label)
         lay.addStretch(1)
+        self._lay = lay
+
+    def set_controls(self, widget: QWidget) -> None:
+        """Adopt the START / STOP / camera buttons, built by the window that wires them.
+
+        They live on this page rather than on a strip of their own so that folding the
+        side panel away (F9) gives the picture the whole window - a fixed strip along the
+        bottom cannot be folded, and it was the last thing between the video and the edge.
+        Built by MainWindow because that is where their signals are connected; placed here
+        because this is the page an operator is looking at while using them.
+
+        Added after the stretch, so the block sits on the bottom edge of the page however
+        much or little the groups above it happen to fill.
+        """
+        self._lay.addWidget(widget)
 
     # ------------------------------------------------------------------ setters
     def set_area_status(self, status: str, text: str | None = None) -> None:

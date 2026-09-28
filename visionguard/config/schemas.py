@@ -84,16 +84,24 @@ class CameraType(str, Enum):
 
 
 class ContainmentMode(str, Enum):
-    FOOT_POINT = "foot_point"
-    CENTER_POINT = "center_point"
+    """How much of a person has to be in the zone before the zone counts as occupied.
+
+    They are listed from the most permissive to the strictest, because that is also the
+    order from "warns early and sometimes for nothing" to "warns late and sometimes not
+    at all" - and for a zone drawn around a machine, the first mistake is the cheap one.
+    """
+    ANY_OVERLAP = "any_overlap"
     INTERSECTION = "intersection"
+    CENTER_POINT = "center_point"
+    FOOT_POINT = "foot_point"
 
     @property
     def label(self) -> str:
         return {
-            ContainmentMode.FOOT_POINT: "Foot Point (bottom-center)",
-            ContainmentMode.CENTER_POINT: "Center Point",
+            ContainmentMode.ANY_OVERLAP: "Any Overlap (vào vùng từ 10% là báo)",
             ContainmentMode.INTERSECTION: "Intersection Percentage",
+            ContainmentMode.CENTER_POINT: "Center Point",
+            ContainmentMode.FOOT_POINT: "Foot Point (bottom-center)",
         }[self]
 
 
@@ -144,6 +152,13 @@ class RtspCameraConfig:
     open_timeout_ms: int = 5000
     read_timeout_ms: int = 5000
     vendor_preset: str = "generic"
+    #: H.264/H.265 decoder threads. Each extra thread holds one more frame back before
+    #: the decoder lets the first one out, so at 20 fps every thread past the first is
+    #: another 50 ms of delay on the picture: OpenCV's default of one thread per core
+    #: measured 606 ms behind the wire on a 12-core PC, one thread measured 58 ms. One
+    #: thread decodes 1280x720 in 9 ms, so it is plenty for a sub-stream; a 4K main stream
+    #: needs 3 or 4 and pays 100-150 ms for them.
+    decode_threads: int = 1
 
 
 @dataclass
@@ -399,7 +414,7 @@ class LogicConfig:
     intersection_threshold: float = 0.30  # for INTERSECTION mode
     on_delay_ms: int = 200
     off_delay_ms: int = 1000
-    min_detection_frames: int = 3
+    min_detection_frames: int = 5     # consecutive AI frames with a person before OCCUPIED (~1.2 s at 4 fps AI)
 
     @property
     def mode_enum(self) -> ContainmentMode:

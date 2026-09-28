@@ -7,7 +7,7 @@
     "http_port": 80,
     "rtsp_port": 554,
     "username": "admin",
-    "password": "",
+    "password": "pana312@",
     "use_https": false,
     "rtsp_url": "",
     "rtsp_channel": "101",
@@ -23,8 +23,8 @@
     ],
     "channels": [],
     "logic": {
-      "on_delay_ms": 20,
-      "off_delay_ms": 1000,
+      "on_delay_ms": 200,
+      "off_delay_ms": 800,
       "clear_timeout_s": 5.0,
       "line_cross_hold_s": 3.0,
       "use_person_count": true,
@@ -42,26 +42,27 @@
     "backend": "auto"
   },
   "video": {
-    "path": "C:/Users/maivi/Downloads/Travailleurs industriels, Vidéothèque Y compris - architecte et homme d'affaire - Envato.mp4",
+    "path": "",
     "loop": true,
     "realtime": true,
     "start_paused": false
   },
   "rtsp": {
     "url": "",
-    "ip": "192.168.1.100",
+    "ip": "192.168.3.60",
     "port": 554,
-    "username": "",
-    "password": "",
-    "path": "/Streaming/Channels/101",
+    "username": "admin",
+    "password": "pana312@",
+    "path": "/Streaming/Channels/102",
     "transport": "tcp",
-    "open_timeout_ms": 5000,
-    "read_timeout_ms": 5000,
-    "vendor_preset": "hikvision"
+    "open_timeout_ms": 5002,
+    "read_timeout_ms": 5002,
+    "vendor_preset": "hikvision",
+    "decode_threads": 1
   },
   "industrial": {
     "serial_number": "",
-    "exposure_us": 10000.0,
+    "exposure_us": 30000.0,
     "gain": 0.0,
     "frame_rate": 30.0,
     "trigger_mode": "off",
@@ -71,7 +72,7 @@
   },
   "reconnect": {
     "enabled": true,
-    "frame_timeout_s": 2.0,
+    "frame_timeout_s": 5.0,
     "delays_s": [
       1.0,
       2.0,
@@ -84,7 +85,7 @@
   "extra": [
     {
       "name": "",
-      "camera_type": "video",
+      "camera_type": "rtsp",
       "ai_camera": {
         "ip": "192.168.1.64",
         "http_port": 80,
@@ -125,22 +126,23 @@
         "backend": "auto"
       },
       "video": {
-        "path": "C:/Users/maivi/Downloads/Travailleurs industriels, Vidéothèque Y compris - architecte et homme d'affaire - Envato.mp4",
+        "path": "",
         "loop": true,
         "realtime": true,
         "start_paused": false
       },
       "rtsp": {
         "url": "",
-        "ip": "192.168.1.100",
+        "ip": "192.168.3.62",
         "port": 554,
-        "username": "",
-        "password": "",
+        "username": "admin",
+        "password": "pana312@",
         "path": "/Streaming/Channels/101",
         "transport": "tcp",
         "open_timeout_ms": 5000,
         "read_timeout_ms": 5000,
-        "vendor_preset": "generic"
+        "vendor_preset": "generic",
+        "decode_threads": 1
       },
       "industrial": {
         "serial_number": "",
@@ -155,7 +157,7 @@
     },
     {
       "name": "",
-      "camera_type": "video",
+      "camera_type": "rtsp",
       "ai_camera": {
         "ip": "192.168.1.64",
         "http_port": 80,
@@ -196,22 +198,23 @@
         "backend": "auto"
       },
       "video": {
-        "path": "C:/Users/maivi/Downloads/Travailleurs industriels, Vidéothèque Y compris - architecte et homme d'affaire - Envato.mp4",
+        "path": "",
         "loop": true,
         "realtime": true,
         "start_paused": false
       },
       "rtsp": {
         "url": "",
-        "ip": "192.168.1.100",
+        "ip": "192.168.3.61",
         "port": 554,
-        "username": "",
-        "password": "",
+        "username": "admin",
+        "password": "pana312@",
         "path": "/Streaming/Channels/101",
         "transport": "tcp",
         "open_timeout_ms": 5000,
         "read_timeout_ms": 5000,
-        "vendor_preset": "generic"
+        "vendor_preset": "hikvision",
+        "decode_threads": 1
       },
       "industrial": {
         "serial_number": "",

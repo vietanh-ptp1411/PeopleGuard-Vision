@@ -58,6 +58,14 @@ def blank_site_config(folder: Path) -> None:
         data["camera_type"] = "rtsp"
         for section in ("video",):
             data.setdefault(section, {})["path"] = ""
+        # An industrial camera is addressed by serial number, and a serial left over from
+        # the build machine is the worst kind of default: the customer's camera is plugged
+        # in and enumerating fine, and the software looks straight past it for a serial
+        # that does not exist here. Blank means "the first camera found", which is right
+        # on a machine with one camera - and that is every machine we ship to.
+        ind = data.setdefault("industrial", {})
+        ind["serial_number"] = ""
+        ind["cti_path"] = ""
         for section in ("rtsp", "ai_camera"):
             block = data.setdefault(section, {})
             block["ip"] = ""
@@ -76,11 +84,24 @@ def blank_site_config(folder: Path) -> None:
         # to whatever else happens to live at 192.168.1.10.
         data.setdefault("connection", {})["ip"] = ""
 
+    def app(data: dict) -> None:
+        # Event folders are absolute on the build machine the moment somebody browses to
+        # one, and an absolute D:\... path means the customer's install quietly writes to
+        # a drive that may not exist. Back to the relative defaults beside the exe.
+        data.pop("recording", None)          # a setting from before the feature was dropped
+        snap = data.setdefault("snapshot", {})
+        if str(snap.get("directory", "")).strip()[1:2] == ":":
+            snap["directory"] = "events"
+        clip = data.setdefault("clip", {})
+        if str(clip.get("directory", "")).strip()[1:2] == ":":
+            clip["directory"] = "events/clips"
+
     edit("camera_config.json", cameras)
     edit("roi_config.json", lambda d: d.update({"rois": []}))
     edit("plc_config.json", plc)
-    print("  config blanked for the site: 1 camera, no IP, no zones, PLC in simulation",
-          flush=True)
+    edit("app_config.json", app)
+    print("  config blanked for the site: 1 camera, no IP, no zones, PLC in simulation, "
+          "event folders relative to the exe", flush=True)
 
 
 def main() -> int:
@@ -94,11 +115,18 @@ def main() -> int:
                          "different model from the machine it was built on.")
     ap.add_argument("--keep-dev-config", action="store_true",
                     help="ship this machine's config as-is instead of a blank site config")
+    ap.add_argument("--work-root", default=None,
+                    help="where the multi-gigabyte build folders go. A GPU build needs "
+                         "around 25 GB of scratch; point this at a drive that has it "
+                         "rather than the one the source happens to sit on.")
     args = ap.parse_args()
 
     started = time.time()
-    dist = BUILD / f"dist-{args.name.lower()}"
-    work = BUILD / f"work-{args.name.lower()}"
+    root = Path(args.work_root) if args.work_root else BUILD
+    root.mkdir(parents=True, exist_ok=True)
+    out_dir = root / "release" if args.work_root else OUT
+    dist = root / f"dist-{args.name.lower()}"
+    work = root / f"work-{args.name.lower()}"
     bundle = dist / "VisionGuard"
     python = BUILD / args.venv / "Scripts" / "python.exe"
     if not python.exists():
@@ -121,6 +149,9 @@ def main() -> int:
             shutil.copytree(src, bundle / name, dirs_exist_ok=True)
     shutil.copy2(BUILD / "Install.bat", bundle / "Install.bat")
     shutil.copy2(ROOT / "tools" / "README-TRIEN-KHAI.md", bundle / "HUONG-DAN.md")
+    # The short one goes in too: HUONG-DAN.md is the reference, this is the checklist
+    # somebody actually follows standing at the customer's machine.
+    shutil.copy2(BUILD / "BAT-DAU.md", bundle / "BAT-DAU.md")
     for junk in ("logs", "events"):
         shutil.rmtree(bundle / junk, ignore_errors=True)
 
@@ -142,8 +173,8 @@ def main() -> int:
             raise SystemExit(f"models/{args.model} is not in the bundle - nothing would load")
 
     print("\n=== 3/3  Zipping ===", flush=True)
-    OUT.mkdir(exist_ok=True)
-    target = OUT / f"VisionGuard-{args.name}.zip"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    target = out_dir / f"VisionGuard-{args.name}.zip"
     target.unlink(missing_ok=True)
     files = [f for f in bundle.rglob("*") if f.is_file()]
     # Deflate at a low level: these are already-compressed DLLs, and level 9 would spend

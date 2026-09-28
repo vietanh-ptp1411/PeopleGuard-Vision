@@ -2,16 +2,18 @@
   "log_level": "INFO",
   "events_db_path": "events/events.db",
   "ui_fps_limit": 30,
+  "autostart": true,
+  "autostart_timeout_s": 25.0,
   "snapshot": {
-    "enabled": true,
+    "enabled": false,
     "directory": "events",
-    "jpeg_quality": 90
+    "jpeg_quality": 100
   },
   "clip": {
     "enabled": false,
     "directory": "events/clips",
     "pre_roll_s": 2.0,
-    "post_roll_s": 2.0,
+    "post_roll_s": 3.0,
     "max_duration_s": 120.0,
     "fps": 0.0,
     "scale": 0.5,
@@ -40,7 +42,5 @@
     "show_ids": true,
     "show_points": true,
     "show_labels": true
-  },
-  "autostart": true,
-  "autostart_timeout_s": 25.0
+  }
 }

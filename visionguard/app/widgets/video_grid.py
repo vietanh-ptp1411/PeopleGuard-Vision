@@ -90,7 +90,6 @@ class VideoGrid(QWidget):
         self._active = 0
         self._maximized = -1
         self._placeholder = ""
-        self._area = ("", "")
         self._overlay = ""
         self._grid = QGridLayout(self)
         self._grid.setContentsMargins(0, 0, 0, 0)
@@ -144,7 +143,7 @@ class VideoGrid(QWidget):
             tile.caption.setVisible(not single)
             # only a tile sitting in the grid doubles as a button
             tile.click_to_zoom = not single and self._maximized < 0
-        self._apply_banner()
+        self._apply_overlay()
 
     def _apply_placeholder(self) -> None:
         """The step-by-step hint only fits on a single tile; repeated four times it is noise."""
@@ -235,25 +234,19 @@ class VideoGrid(QWidget):
         for tile in self._tiles:
             getattr(tile.view, name)(*args)
 
-    def set_area_status(self, text: str, color: str) -> None:
-        self._area = (text, color)
-        self._apply_banner()
-
     def set_overlay_info(self, text: str) -> None:
         self._overlay = text
-        self._apply_banner()
+        self._apply_overlay()
 
-    def _apply_banner(self) -> None:
-        """The area banner belongs to the group, not to one camera.
+    def _apply_overlay(self) -> None:
+        """The system message belongs to the group, not to one camera.
 
-        Painted on every tile of a wall it reads as four separate verdicts, which is wrong -
-        the area is the OR of them all. So it only shows where there is one picture to
-        show it on: a single camera, or the tile currently filled out.
+        Painted on every tile of a wall it reads as four separate messages about one system.
+        So it only shows where there is one picture to show it on: a single camera, or the
+        tile currently filled out.
         """
-        text, color = self._area
         for tile in self._tiles:
             solo = len(self._tiles) == 1 or tile.index == self._maximized
-            tile.view.set_area_status(text if solo else "", color)
             tile.view.set_overlay_info(self._overlay if solo else "")
 
     def set_placeholder(self, text: str) -> None:

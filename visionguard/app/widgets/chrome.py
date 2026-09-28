@@ -23,7 +23,7 @@ except ImportError:                      # ships with ultralytics, but never ass
     psutil = None
 
 from ...utils.paths import asset_path
-from ..theme import (COLOR_BORDER, COLOR_ERROR, COLOR_ERROR_SOFT, COLOR_HEADER_DIM, COLOR_TEXT_DIM,
+from ..theme import (COLOR_ERROR, COLOR_ERROR_SOFT, COLOR_HEADER_DIM, COLOR_TEXT_DIM,
                      COLOR_TEXT_MUTED, COLOR_WARN, COLOR_WARN_SOFT, contrast_text, state_colors, status_caption,
                      status_color)
 from .led_indicator import LedIndicator
@@ -62,17 +62,21 @@ class ElidedLabel(QLabel):
 # --------------------------------------------------------------------------- app bar
 BAR_HEIGHT = 64
 LOGO_HEIGHT = 28
+#: The partner mark rides lower than the company mark on purpose. Its wordmark is all
+#: caps filling the full glyph height, so matched pixel-for-pixel against a logo with a
+#: badge and lowercase it reads as the louder of the two - which is backwards.
+PARTNER_LOGO_HEIGHT = 19
 MARGIN = 16
 
 
-def _load_logo(height: int) -> QPixmap | None:
-    """The company wordmark, rendered for this screen's pixel density.
+def _load_logo(name: str, height: int) -> QPixmap | None:
+    """A wordmark from the assets folder, rendered for this screen's pixel density.
 
     Scaling a 160px-tall source down to 28 logical pixels is what keeps the letters
     crisp; handing Qt the raw file and letting the label squash it is what makes a
     logo look cheap. Returns None if the asset is missing so the bar still builds.
     """
-    path = asset_path("company_logo.png")
+    path = asset_path(name)
     if not path.exists():
         return None
     source = QPixmap(str(path))
@@ -287,17 +291,29 @@ class AppBar(QFrame):
     def refresh_resources(self) -> None:
         self.meter.refresh()
 
-    def _company_mark(self) -> QFrame:
-        """The company wordmark on a white plate, or its name if the file is missing."""
+    def _company_mark(self) -> QWidget:
+        """Two marks side by side: who built it, and who it is built for.
+
+        Only the company mark gets the white plate - its artwork is dark and needs a light
+        ground. The partner mark sits straight on the bar, 5px away, in the white version
+        of the wordmark. Its blue (#0056A8) against this bar (#122234) measures 2.2:1,
+        under the 3:1 a graphic needs to stay legible; reversing it to white is what the
+        brand's own dark-background lockup does, and it is the same artwork either way.
+        """
+        holder = QWidget()
+        holder.setProperty("class", "transparent")
+        row = QHBoxLayout(holder)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(5)
+
         plate = QFrame()
         plate.setProperty("class", "logoplate")
         plate.setToolTip("MVA LAB - Tech for Solution")
         inner = QHBoxLayout(plate)
         inner.setContentsMargins(11, 5, 11, 5)
         inner.setSpacing(0)
-
         label = QLabel()
-        pixmap = _load_logo(LOGO_HEIGHT)
+        pixmap = _load_logo("company_logo.png", LOGO_HEIGHT)
         if pixmap is not None:
             label.setPixmap(pixmap)
         else:
@@ -305,7 +321,15 @@ class AppBar(QFrame):
             label.setStyleSheet("color: #1436C8; font-size: 13pt; font-weight: 800;"
                                 " letter-spacing: 1px; background: transparent;")
         inner.addWidget(label)
-        return plate
+        row.addWidget(plate)
+
+        partner = _load_logo("partner_logo_light.png", PARTNER_LOGO_HEIGHT)
+        if partner is not None:
+            mark = QLabel()
+            mark.setPixmap(partner)
+            mark.setToolTip("Panasonic")
+            row.addWidget(mark, 0, Qt.AlignmentFlag.AlignVCenter)
+        return holder
 
     def set_clock(self, time_text: str, date_text: str = "") -> None:
         self.lbl_time.setText(time_text)
@@ -358,11 +382,14 @@ class StateChip(QFrame):
         self.setProperty("class", "chip")
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setMinimumWidth(118)
-        self.setFixedHeight(48)
+        # 42, not 48. This row sits between the app bar and the picture, and every pixel
+        # it keeps is a pixel of video. Two short lines of 7.5pt and 10pt need 30; the
+        # rest is breathing room, and 42 still leaves some.
+        self.setFixedHeight(42)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
 
         lay = QHBoxLayout(self)
-        lay.setContentsMargins(11, 5, 11, 5)
+        lay.setContentsMargins(11, 3, 11, 3)
         lay.setSpacing(9)
         self.led = LedIndicator(diameter=11)
         lay.addWidget(self.led, 0, Qt.AlignmentFlag.AlignVCenter)
@@ -454,17 +481,6 @@ def card_header(title: str, subtitle: str = "") -> QFrame:
         lay.addWidget(sub)
     lay.addStretch(1)
     return frame
-
-
-def separator(vertical: bool = True, length: int = 26) -> QFrame:
-    f = QFrame()
-    if vertical:
-        f.setFixedWidth(1)
-        f.setMinimumHeight(length)
-    else:
-        f.setFixedHeight(1)
-    f.setStyleSheet(f"background: {COLOR_BORDER}; border: none;")
-    return f
 
 
 def caption(text: str) -> QLabel:

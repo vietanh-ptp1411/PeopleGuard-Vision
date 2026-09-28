@@ -254,6 +254,7 @@ QTabBar::tab {{
 QTabBar::tab:hover {{ color: {COLOR_ACCENT}; }}
 QTabBar::tab:selected {{ color: {COLOR_ACCENT}; border-bottom: 2px solid {COLOR_ACCENT}; }}
 QTabBar::tab:disabled {{ color: {COLOR_TEXT_MUTED}; }}
+QTabBar#SidePanelTabBar::tab {{ padding: 9px 6px 8px 6px; margin-right: 1px; font-size: 9pt; }}
 
 /* ---------------------------------------------------------------- buttons */
 QPushButton {{

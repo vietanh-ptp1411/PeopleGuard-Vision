@@ -9,7 +9,10 @@ import argparse
 import logging
 import os
 import sys
+import time
 from pathlib import Path
+
+_T0 = time.perf_counter()   # process start, near enough: the start-up log lines count from here
 
 # Run relative to the application folder so models/, config/, logs/, events/ resolve
 # predictably: beside the exe when frozen, beside this file when run from source.
@@ -20,35 +23,37 @@ else:
     sys.path.insert(0, str(PROJECT_DIR))
 os.chdir(PROJECT_DIR)
 
-# Reduce OpenCV/FFmpeg console noise and prefer TCP for RTSP unless overridden later by config.
-os.environ.setdefault("OPENCV_LOG_LEVEL", "ERROR")
-os.environ.setdefault("OPENCV_FFMPEG_CAPTURE_OPTIONS", "rtsp_transport;tcp")
-
+# The OpenCV FFmpeg options (TCP, short stream probe) cannot be set from inside this
+# process - see visionguard/utils/process_env.py for what was tried. main() relaunches
+# once with them in the environment unless the launcher already provided them.
+from visionguard.utils import process_env  # noqa: E402
 from visionguard.utils.logger import setup_logging  # noqa: E402
 
+# There used to be a "prewarm" thread here that imported torch a second time, in parallel
+# with the inference worker importing it for the model load. Two threads importing the
+# same package serialise on the import lock, so it bought nothing, and both held the GIL
+# against the window being built. The inference worker alone does the import now, started
+# from SystemController.__init__ (see the note there on why before the window, not after).
 
-def _prewarm_detector() -> None:
-    """Pull torch and ultralytics in on a side thread, starting now.
 
-    Importing torch costs about 1.6 seconds and the inference worker only reaches for it
-    once the window has been built - so the app pays for the import after it has already
-    spent a second building the UI, one after the other. Python caches modules, so doing
-    it here means the two overlap and the model is ready sooner. Measured: 5.7s to
-    detecting, down to 5.1s.
+def _single_instance_guard():
+    """Refuse to be the second copy. Returns the lock, or None if one is already running.
 
-    Nothing depends on this finishing. If it fails, the worker imports torch itself and
-    reports the failure the same way it always did.
+    Auto-start makes this necessary rather than tidy. The scheduled task opens the
+    application at logon, and then somebody double-clicks the desktop icon out of habit -
+    now two processes fight over one RTSP session and, far worse, BOTH write to the PLC.
+    Two writers on the same person bit is a safety interface nobody can reason about.
+
+    The handle has to be kept alive by the caller; Windows releases it when the process
+    ends, including when it crashes, so a stale lock cannot block the next start.
     """
-    import threading
+    from PySide6.QtCore import QSharedMemory
 
-    def _work() -> None:
-        try:
-            import torch  # noqa: F401
-            import ultralytics  # noqa: F401
-        except Exception:
-            pass          # the worker will try again and report it properly
-
-    threading.Thread(target=_work, name="prewarm-detector", daemon=True).start()
+    lock = QSharedMemory("VisionGuard-single-instance")
+    if lock.attach():            # someone else created it; let go of our view of it
+        lock.detach()
+        return None
+    return lock if lock.create(1) else None
 
 
 def _install_excepthook() -> None:
@@ -69,6 +74,11 @@ def main() -> int:
                         help="run the pre-flight check and exit (0 ready, 1 fault, 2 warnings)")
     args = parser.parse_args()
 
+    if not process_env.inherited():
+        # Started by a shortcut or a terminal, not by the launcher: come back with the
+        # environment the camera plugin needs. Costs one interpreter start-up.
+        return process_env.relaunch(__file__)
+
     if args.check:
         from visionguard.diagnostics.preflight import main as preflight_main
         return preflight_main(args.config_dir)
@@ -77,14 +87,12 @@ def main() -> int:
 
     cm = ConfigManager(args.config_dir)
     settings = cm.load_all()
-    if not settings.camera.is_ai_camera:
-        _prewarm_detector()      # only PC AI / YOLO mode needs torch at all
     level_name = (args.log_level or settings.app.log_level or "INFO").upper()
     setup_logging("logs", getattr(logging, level_name, logging.INFO))
     _install_excepthook()
     log = logging.getLogger("SYSTEM")
     log.info("=" * 60)
-    log.info("VisionGuard starting (python %s)", sys.version.split()[0])
+    log.info("VisionGuard starting (python %s) - %.1fs after launch", sys.version.split()[0], time.perf_counter() - _T0)
 
     from PySide6.QtCore import Qt
     from PySide6.QtWidgets import QApplication
@@ -97,11 +105,31 @@ def main() -> int:
     app = QApplication(sys.argv)
     app.setApplicationName("VisionGuard")
     app.setOrganizationName("VisionGuard")
+
+    guard = _single_instance_guard()
+    if guard is None:
+        log.warning("Another VisionGuard is already running - not starting a second one")
+        if args.autostart:
+            # Started by the machine, not by a person: there is nobody at the screen to
+            # dismiss a dialog, and one left sitting there covers the live view until
+            # somebody walks over. Two start mechanisms racing at boot is a normal,
+            # healthy outcome - the loser should lose silently.
+            return 0
+        from PySide6.QtWidgets import QMessageBox
+        QMessageBox.information(None, "VisionGuard",
+                                "VisionGuard đã chạy sẵn rồi.\n\n"
+                                "Phần mềm tự khởi động cùng Windows, nên thường nó đã "
+                                "chạy sẵn khi bạn bấm lối tắt.")
+        return 0
+
     apply_theme(app)
     install_wheel_guard(app)   # scrolling a settings page must never change a value
 
     window = MainWindow(cm)
+    log.info("Window built %.1fs after launch", time.perf_counter() - _T0)
     window.showMaximized()   # industrial HMI: always start on the full screen (F11 = borderless)
+    app.processEvents()      # paint it now, before autostart queues its work behind the first frame
+    log.info("Window shown %.1fs after launch", time.perf_counter() - _T0)
     if args.autostart or settings.app.autostart:
         # Unattended site: nobody is there to press START after a power cut. The
         # controller waits for the model rather than for a fixed number of seconds.

@@ -194,7 +194,8 @@ class PlcConfigWidget(QWidget):
         self.edt_hb = QLineEdit()
         self.edt_word = QLineEdit()
         self.chk_word = QCheckBox("Ghi status word")
-        self.chk_roi_devices = QCheckBox("Ghi thêm bit riêng của từng vùng")
+        self.chk_roi_devices = QCheckBox("Bit riêng từng vùng")
+        self.chk_roi_devices.setToolTip("Ngoài bit PERSON chung, ghi thêm một bit cho mỗi vùng")
         fm.addRow("Signal mode", self.cmb_signal)
         fm.addRow("Camera OK", self.edt_camera)
         fm.addRow("AI Running", self.edt_ai)
@@ -213,7 +214,8 @@ class PlcConfigWidget(QWidget):
 
         g_hb = QGroupBox("HEARTBEAT && FAIL-SAFE")
         fh = QFormLayout(g_hb)
-        self.chk_hb = QCheckBox("Bật heartbeat (bit đảo 0/1)")
+        self.chk_hb = QCheckBox("Bật heartbeat")
+        self.chk_hb.setToolTip("Bit đảo 0/1 liên tục để PLC biết phần mềm còn sống")
         self.spn_hb = QSpinBox()
         self.spn_hb.setRange(100, 60000)
         self.spn_hb.setSuffix(" ms")
@@ -222,7 +224,8 @@ class PlcConfigWidget(QWidget):
         self.cmb_fault_person.addItem("Giữ nguyên giá trị cuối", FaultPersonOutput.HOLD.value)
         self.cmb_fault_person.addItem("Ép ON (coi như có người)", FaultPersonOutput.ON.value)
         self.cmb_fault_person.addItem("Ép OFF (PLC tự đọc bit FAULT)", FaultPersonOutput.OFF.value)
-        self.chk_clear_off = QCheckBox("Ép bit CLEAR = OFF khi FAULT")
+        self.chk_clear_off = QCheckBox("CLEAR = OFF khi lỗi")
+        self.chk_clear_off.setToolTip("Khi hệ thống lỗi, ép bit CLEAR về 0 - không bao giờ báo vùng trống")
         fh.addRow("", self.chk_hb)
         fh.addRow("Chu kỳ heartbeat", self.spn_hb)
         fh.addRow("Bit PERSON khi FAULT", self.cmb_fault_person)
@@ -261,7 +264,7 @@ class PlcConfigWidget(QWidget):
         self.simulation_toggled.emit(on)
 
     def _sim_toggled_silent(self, on: bool) -> None:
-        self.btn_sim.setText("SIMULATION MODE: ON  (virtual PLC)" if on else "SIMULATE PLC (no hardware)")
+        self.btn_sim.setText("MÔ PHỎNG: BẬT" if on else "MÔ PHỎNG: TẮT")
         self.lbl_sim.setText("Không kết nối PLC thật. Mọi lệnh ghi vào bộ nhớ ảo ở tab Memory."
                              if on else "Kết nối PLC Mitsubishi thật qua MC Protocol 3E / TCP.")
         for w in (self.edt_ip, self.spn_port, self.cmb_format, self.spn_net, self.spn_pc, self.spn_io,

@@ -8,8 +8,8 @@ Point = Tuple[float, float]
 Polygon = Sequence[Point]
 
 
-def point_in_polygon(pt: Point, poly: Polygon) -> bool:
-    """Ray-casting point-in-polygon (even-odd). Works for concave polygons."""
+def point_in_polygon(pt: Point, poly: Polygon, *, include_boundary: bool = False) -> bool:
+    """Ray-casting test; optionally accept edges/vertices within 1e-9 coord units."""
     n = len(poly)
     if n < 3:
         return False
@@ -19,6 +19,8 @@ def point_in_polygon(pt: Point, poly: Polygon) -> bool:
     for i in range(n):
         xi, yi = poly[i]
         xj, yj = poly[j]
+        if include_boundary and distance_point_segment(pt, poly[j], poly[i])[0] <= 1e-9:
+            return True
         if (yi > y) != (yj > y):
             x_int = (xj - xi) * (y - yi) / ((yj - yi) or 1e-12) + xi
             if x < x_int:

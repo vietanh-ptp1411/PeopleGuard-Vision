@@ -28,6 +28,7 @@ class RoiPanel(QWidget):
     save_requested = Signal()
     selection_changed = Signal(str)
     fields_changed = Signal(str, str, str, bool, int)   # id, name, plc_device, enabled, camera
+    target_camera_changed = Signal(int)                 # draw the next zone on this camera
 
     COLS = ("ID", "Cam", "Name", "Type", "On", "PLC", "Pts", "State")
 
@@ -50,11 +51,22 @@ class RoiPanel(QWidget):
         lay.setSpacing(8)
 
         lay.addWidget(page_header("Zones", "Vẽ polygon: người trong vùng sẽ bật bit PLC"))
-        self.lbl_target = QLabel("")
-        self.lbl_target.setWordWrap(True)
-        self.lbl_target.setStyleSheet(f"color: {COLOR_OK}; font-weight: 600;")
-        self.lbl_target.hide()
-        lay.addWidget(self.lbl_target)
+        # Which camera the next zone goes on. This used to be a sentence telling you to
+        # click another camera's tile - on a page where the picture is zoomed to one camera
+        # and there is no other tile to click. Getting to camera 2 meant Overview, un-zoom,
+        # click camera 2, back to Zones. Now it is a box on this page.
+        self.row_target = QWidget()
+        tl = QHBoxLayout(self.row_target)
+        tl.setContentsMargins(0, 0, 0, 0)
+        lbl = QLabel("Vẽ trên camera:")
+        lbl.setStyleSheet(f"color: {COLOR_OK}; font-weight: 600;")
+        self.cmb_target = QComboBox()
+        self.cmb_target.setToolTip("Camera sẽ được phóng to và vùng mới sẽ thuộc về nó")
+        self.cmb_target.currentIndexChanged.connect(self._on_target_changed)
+        tl.addWidget(lbl)
+        tl.addWidget(self.cmb_target, 1)
+        self.row_target.hide()
+        lay.addWidget(self.row_target)
 
         g_act = QGroupBox("ROI EDITOR")
         gl = QGridLayout(g_act)
@@ -201,12 +213,24 @@ class RoiPanel(QWidget):
         self.cmb_camera.blockSignals(False)
         self.cmb_camera.setEnabled(len(labels) > 1)
 
-    def set_camera_context(self, label: str, several: bool) -> None:
-        """Name the camera a new zone would be drawn on, when there is a choice."""
-        self.lbl_target.setVisible(several)
-        if several:
-            self.lbl_target.setText(f"Vùng mới sẽ thuộc về: {label}  —  bấm vào ô hình của camera "
-                                    f"khác để đổi")
+    def set_target_camera(self, index: int, labels) -> None:
+        """Show which camera a new zone would be drawn on, when there is a choice."""
+        labels = list(labels)
+        several = len(labels) > 1
+        self.row_target.setVisible(several)
+        if not several:
+            return
+        self.cmb_target.blockSignals(True)
+        if [self.cmb_target.itemText(i) for i in range(self.cmb_target.count())] != labels:
+            self.cmb_target.clear()
+            for i, name in enumerate(labels):
+                self.cmb_target.addItem(name, i)
+        self.cmb_target.setCurrentIndex(max(0, min(int(index), len(labels) - 1)))
+        self.cmb_target.blockSignals(False)
+
+    def _on_target_changed(self, index: int) -> None:
+        if index >= 0:
+            self.target_camera_changed.emit(int(index))
 
     def set_mode(self, mode: str) -> None:
         drawing = mode == "drawing"
@@ -227,6 +251,16 @@ class RoiPanel(QWidget):
         else:
             self.lbl_hint.setText("Click trái trên hình để thêm điểm, double-click / Enter để đóng polygon.")
             self.lbl_hint.setStyleSheet(f"color: {COLOR_TEXT_DIM}; font-size: 9pt;")
+
+    def set_notice(self, text: str) -> None:
+        """A one-off message from the picture - a refused double-click, a cancelled draw.
+
+        Written into the same line as the mode instructions rather than a line of its own:
+        both answer "what is going on with this drawing", and the next set_mode replaces
+        it, so the message lasts exactly as long as the situation it describes.
+        """
+        self.lbl_hint.setText(text)
+        self.lbl_hint.setStyleSheet(f"color: {COLOR_WARN}; font-size: 9pt;")
 
     def set_dirty(self, dirty: bool) -> None:
         self.btn_save.setText("Save ROI *" if dirty else "Save ROI")

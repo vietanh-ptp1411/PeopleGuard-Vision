@@ -14,7 +14,7 @@ from typing import Dict, List, Optional, Sequence, Tuple
 from ..config.schemas import ContainmentMode
 from ..vision.detection import Detection, DetectionZoneStatus, EvaluatedDetection
 from .geometry import bbox_polygon_intersection_ratio, point_in_polygon
-from .roi_model import Roi
+from .roi_model import Roi, full_frame_roi
 
 
 @dataclass
@@ -46,6 +46,12 @@ class RoiProcessor:
     # ------------------------------------------------------------------ core
     def evaluate(self, detections: Sequence[Detection], width: int, height: int, rois: Sequence[Roi]) -> RoiEvaluation:
         includes = [r for r in rois if r.enabled and r.is_include and r.is_valid()]
+        if not includes:
+            # No zone drawn on this camera means the whole picture is the zone, not that
+            # nothing is watched. A camera that was pointed at a machine and then left
+            # without a polygon used to detect people all day and never raise anything -
+            # a guard that looks like it is working and is not. Exclusions still apply.
+            includes = [full_frame_roi()]
         excludes = [r for r in rois if r.enabled and r.is_exclude and r.is_valid()]
         result = RoiEvaluation(roi_counts={r.id: 0 for r in includes})
         w = float(max(1, width))
@@ -80,14 +86,42 @@ class RoiProcessor:
             return det.bbox.center
         return det.bbox.foot_point
 
+    #: Any Overlap used to fire on any touch at all (1e-6 of the box). On the floor that
+    #: meant a person walking along the edge of a zone, or an arm reaching over it, tripped
+    #: the guard. A tenth of the box has to be inside now: still the most sensitive mode,
+    #: still far below the 30% Intersection Percentage asks for, but no longer a graze.
+    ANY_OVERLAP_MIN = 0.10
+
     def _inside(self, norm_pt, norm_box, roi: Roi) -> bool:
+        if self.mode == ContainmentMode.ANY_OVERLAP:
+            return bbox_polygon_intersection_ratio(norm_box, roi.points) >= self.ANY_OVERLAP_MIN - 1e-9
         if self.mode == ContainmentMode.INTERSECTION:
             return bbox_polygon_intersection_ratio(norm_box, roi.points) >= self.intersection_threshold
-        return point_in_polygon(norm_pt, roi.points)
+        # A clipped person's foot can lie exactly on the bottom image/ROI edge.
+        # Include that boundary for FootPoint alarm zones, without expanding exclusions.
+        return point_in_polygon(
+            norm_pt, roi.points,
+            include_boundary=self.mode == ContainmentMode.FOOT_POINT and roi.is_include,
+        )
+
+    def _excluded(self, norm_pt, norm_box, roi: Roi) -> bool:
+        """Whether an exclusion zone swallows this detection.
+
+        Deliberately NOT the permissive test, even in Any Overlap mode. Every containment
+        mode answers "is this person in the zone", but the two kinds of zone want opposite
+        biases from that answer: on an include zone, leaning towards yes means warning a
+        little early, while on an exclude zone it means dropping a person who was standing
+        in the danger area but whose box happened to clip the corner of somewhere we agreed
+        to ignore. Early warnings are a nuisance; a dropped person is the failure this whole
+        system exists to prevent. So exclusion always asks the strict question.
+        """
+        if self.mode == ContainmentMode.ANY_OVERLAP:
+            return point_in_polygon(norm_pt, roi.points)
+        return self._inside(norm_pt, norm_box, roi)
 
     def _first_hit(self, norm_pt, norm_box, rois: Sequence[Roi]) -> Optional[str]:
         for r in rois:
-            if self._inside(norm_pt, norm_box, r):
+            if self._excluded(norm_pt, norm_box, r):
                 return r.id
         return None
 

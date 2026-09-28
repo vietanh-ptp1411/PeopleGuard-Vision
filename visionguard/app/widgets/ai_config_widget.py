@@ -75,9 +75,12 @@ class AIConfigWidget(QWidget):
         self.spn_imgsz = QSpinBox()
         self.spn_imgsz.setRange(160, 1920)
         self.spn_imgsz.setSingleStep(32)
-        self.chk_tracking = QCheckBox("Person tracking (ByteTrack IDs)")
+        self.chk_tracking = QCheckBox("Theo dõi ID người")
+        self.chk_tracking.setToolTip("ByteTrack: gán số ID cho từng người và giữ qua các khung hình")
         self.chk_half = QCheckBox("FP16 on CUDA")
-        self.chk_autoload = QCheckBox("Load model automatically at startup")
+        self.chk_half.setToolTip(self.HALF_WARNING)
+        self.chk_autoload = QCheckBox("Tự nạp model khi mở")
+        self.chk_autoload.setToolTip("Nạp model ngay khi khởi động, không đợi bấm Load model")
         f.addRow("Confidence", self.spn_conf)
         f.addRow("Device", self.cmb_device)
         f.addRow(hint("Confidence thấp thì dễ bắt người hơn nhưng dễ báo nhầm. Device auto sẽ dùng GPU nếu có."))
@@ -119,6 +122,9 @@ class AIConfigWidget(QWidget):
         f2.addRow("Intersection threshold", self.spn_inter)
         f2.addRow("Min detection frames", self.spn_min_frames)
         self.advanced.rows(f2, self.spn_inter, self.spn_min_frames)
+        f2.addRow(hint("Containment mode — phần nào của người phải vào vùng mới tính:  "
+                       "Any Overlap = từ 10% khung người vào vùng là báo (nhạy nhất);  "
+                       "Foot Point = phải đặt chân vào vùng (chặt nhất, báo muộn nhất)."))
         f2.addRow(hint("ON delay: người phải xuất hiện liên tục bao lâu mới báo CÓ NGƯỜI.  "
                        "OFF delay: vùng phải trống bao lâu mới báo HẾT NGƯỜI "
                        "(mất 1-2 frame vẫn giữ trạng thái)."))
@@ -152,15 +158,22 @@ class AIConfigWidget(QWidget):
         self.btn_stop.clicked.connect(self.stop_detection_requested)
 
     #: What each bundled model costs and buys, measured on this project's own footage
-    #: rather than copied off a benchmark table. Frame times are for one 960x540 frame.
+    #: rather than copied off a benchmark table. Frame times are one 2688x1520 frame on a
+    #: GTX 1650 in FP32 - see models/README.txt for which YOLO release each file is.
     MODEL_NOTES = {
-        "yolo11n.pt": "Nhỏ nhất, nhanh nhất. CPU 54 ms · GPU 14 ms. "
-                      "Lựa chọn duy nhất chạy kịp 3 camera trên máy không có card rời.",
-        "yolo11s.pt": "Bắt người tốt hơn hẳn nano ở cảnh khó. CPU 120 ms · GPU 14 ms — "
-                      "trên GPU nhanh ngang nano, nên máy có card thì chọn cái này.",
-        "yolo11m.pt": "Bắt tốt nhất trong ba. CPU 270 ms · GPU 28 ms. Với 3 camera ở 12 fps "
-                      "thì chiếm trọn một GTX 1650, cần card mạnh hơn.",
+        "model1.pt": "Mặc định. imgsz 1280 → 42 ms, chiếm 64% ngân sách 1 camera ở 15 fps. "
+                     "Đủ pixel để còn thấy người ở rìa xa của vùng — hạ imgsz xuống 640 là "
+                     "người xa biến mất, model nào cũng vậy.",
+        "model2.pt": "To hơn, khá hơn ở cảnh khó: người bị che một phần, dáng lạ, ngược sáng. "
+                     "Trên GTX 1650 tốn 94 ms ở imgsz 1280 — vượt ngân sách; để dành cho máy "
+                     "RTX 4060, hoặc chạy ở imgsz 960 (57 ms).",
     }
+
+    #: FP16 is a trap on Turing without tensor cores: measured 3x SLOWER than FP32 on a
+    #: GTX 1650 (model2 at imgsz 640 went 32 ms -> 108 ms). Re-measure before enabling it
+    #: on an Ada/Ampere card, where it should finally pay off.
+    HALF_WARNING = ("Chỉ bật trên card có tensor core (RTX). Trên GTX 16xx đo được "
+                    "chậm gấp 3 lần, không nhanh hơn.")
 
     def _fill_models(self) -> None:
         """List what is actually in models/, so the combo never offers a missing file."""

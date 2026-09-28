@@ -21,10 +21,12 @@ datas = []
 # Ultralytics reads yaml out of its own package at runtime (default.yaml, trackers).
 datas += collect_data_files("ultralytics", include_py_files=False)
 
-# The company wordmark in the app bar. collect_submodules brings the code but not the
-# picture, and a missing file would quietly drop the logo out of the frozen build.
-datas += [(str(ROOT / "visionguard" / "app" / "assets" / "company_logo.png"),
-           "visionguard/app/assets")]
+# Everything in the assets folder: the two wordmarks in the app bar and the arrow glyphs
+# the stylesheet draws on combo boxes and spin boxes. collect_submodules brings the code
+# but not the pictures, and naming them one by one is how the arrows came to be missing
+# from frozen builds - a dropped file is silent, the widget just renders without its mark.
+datas += [(str(path), "visionguard/app/assets")
+          for path in sorted((ROOT / "visionguard" / "app" / "assets").glob("*.png"))]
 
 # torchvision registers its custom operators (nms among them) from a compiled extension.
 # PyInstaller does not pick that up on its own, and without it the model loads and then
@@ -104,7 +106,12 @@ launcher_exe = EXE(
     exclude_binaries=True,
     name="VisionGuardLauncher",
     debug=False,
-    console=True,                # it is the watchdog; its log is the point
+    # Windowed, like the application. A console exe started at logon puts a black
+    # Windows Terminal window on the HMI screen - two of them, with two start
+    # mechanisms - and it cannot be hidden from inside, because on Windows 11 that
+    # window belongs to WindowsTerminal.exe, not to us. The watchdog's log is a file;
+    # --check-only borrows the caller's console (see attach_parent_console).
+    console=False,
     icon=None,
 )
 

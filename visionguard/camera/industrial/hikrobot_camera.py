@@ -1,34 +1,141 @@
 """Hikrobot (HIKROBOT MVS SDK) camera adapter.
 
-The MVS Python binding is not on PyPI. After installing MVS, add
-    <MVS>/Development/Samples/Python/MvImport
-to PYTHONPATH (or copy MvCameraControl_class.py & friends next to this package).
-When the SDK is missing this adapter reports "SDK not installed" and never crashes.
+The MVS Python binding is not on PyPI - it ships inside the MVS installation as loose
+.py files. This module finds that folder itself (see _find_mvimport); when MVS is not
+installed the adapter reports "SDK not installed" and never crashes.
 """
 from __future__ import annotations
 
 import logging
+import os
 import sys
 from ctypes import POINTER, byref, c_ubyte, cast, memmove, memset, sizeof
+from pathlib import Path
 from typing import List, Optional
 
 import numpy as np
 
 from ...config.schemas import IndustrialCameraConfig
+from ...utils.paths import app_dir
 from ..base_camera import CameraInfo, DeviceDescriptor, Frame
 from .industrial_base import IndustrialCameraBase, to_bgr
 
 log = logging.getLogger("CAMERA")
 
+_MVIMPORT_TAIL = Path("Samples") / "Python" / "MvImport"
+
+
+def _mvimport_candidates() -> List[Path]:
+    """Everywhere the MVS Python binding is plausibly sitting, best guess first.
+
+    MVS sets MVCAM_COMMON_RUNENV to its Development folder when it installs, so that is
+    the answer on a machine that has it; the fixed paths are the fallback for an install
+    that did not set the variable, or a session that started before it existed.
+    """
+    out: List[Path] = []
+    run_env = os.environ.get("MVCAM_COMMON_RUNENV", "").strip('"')
+    if run_env:
+        out.append(Path(run_env) / _MVIMPORT_TAIL)
+    sdk = os.environ.get("MVCAM_SDK_PATH", "").strip('"')
+    if sdk:
+        out.append(Path(sdk) / "Development" / _MVIMPORT_TAIL)
+    for base in (r"C:\Program Files (x86)\MVS", r"C:\Program Files\MVS"):
+        out.append(Path(base) / "Development" / _MVIMPORT_TAIL)
+    # A copy dropped beside the application, for a machine where MVS cannot be installed.
+    out.append(app_dir() / "MvImport")
+    return out
+
+
+def _find_mvimport() -> Optional[Path]:
+    """Put the MVS binding on sys.path, because asking the customer to do it does not work.
+
+    This used to be a line in the docs: "add <MVS>/Development/Samples/Python/MvImport to
+    PYTHONPATH". On the machine it was written for that is a five minute job; on a machine
+    somebody else set up, the camera page just says SDK not installed and nobody connects
+    the dots. The folder is in exactly one of a handful of places - find it.
+    """
+    for path in _mvimport_candidates():
+        try:
+            if (path / "MvCameraControl_class.py").is_file():
+                if str(path) not in sys.path:
+                    sys.path.insert(0, str(path))
+                return path
+        except OSError:
+            continue
+    return None
+
+
+#: Handles from os.add_dll_directory. They must be kept alive: dropping one removes the
+#: directory again, and the next DLL the SDK pulls in would not be found.
+_DLL_DIRS: List = []
+
+
+def _mvs_runtime_dirs() -> List[Path]:
+    """Folders holding MvCameraControl.dll and the SDK's own dependencies."""
+    out: List[Path] = []
+    for entry in os.environ.get("PATH", "").split(os.pathsep):
+        text = entry.strip().strip('"')
+        if text and "MVS" in text.upper() and "RUNTIME" in text.upper():
+            out.append(Path(text))
+    for fixed in (r"C:\Program Files (x86)\Common Files\MVS\Runtime\Win64_x64",
+                  r"C:\Program Files\Common Files\MVS\Runtime\Win64_x64"):
+        out.append(Path(fixed))
+    return out
+
+
+def _preload_mvs_dll() -> Optional[str]:
+    """Load MvCameraControl.dll by absolute path before the SDK asks for it by name.
+
+    MVS puts its runtime on PATH and its Python binding loads the DLL by bare name, which
+    is fine in a normal interpreter. It is not fine in a frozen build: the PyInstaller
+    bootloader calls SetDefaultDllDirectories, and that takes PATH out of the DLL search
+    order altogether - so the same install that works from source fails packaged, with
+    "Failed to load dynlib/dll 'MvCameraControl.dll'" and no hint that PATH is the reason.
+
+    Loading it here by full path puts the module in the process; the binding's own bare-name
+    load then finds it already loaded. add_dll_directory is for what the SDK loads next.
+    """
+    import ctypes
+
+    for folder in _mvs_runtime_dirs():
+        dll = folder / "MvCameraControl.dll"
+        try:
+            if not dll.is_file():
+                continue
+            if hasattr(os, "add_dll_directory"):
+                _DLL_DIRS.append(os.add_dll_directory(str(folder)))
+            ctypes.WinDLL(str(dll), winmode=0)
+            return str(dll)
+        except OSError as exc:
+            log.debug("MVS runtime at %s did not load: %s", folder, exc)
+            continue
+    return None
+
+
+_MVIMPORT = _find_mvimport()
+_MVS_DLL = _preload_mvs_dll() if _MVIMPORT else None
+
 try:  # optional SDK
     import MvCameraControl_class as mv  # type: ignore
 
     _MVS_OK = True
+    # Short on purpose: the camera-type dropdown puts this next to the vendor name, and a
+    # 60-character install path there would widen the side panel on its own. The path is
+    # logged instead - that is where you look when the wrong MVS turns out to be in use.
     _MVS_STATUS = "OK"
+    log.info("Hikrobot MVS binding: %s (dll: %s)", _MVIMPORT, _MVS_DLL or "tìm theo PATH")
 except Exception as _exc:
     mv = None  # type: ignore
     _MVS_OK = False
-    _MVS_STATUS = f"SDK not installed (MvCameraControl_class: {type(_exc).__name__}; add MVS MvImport to PYTHONPATH)"
+    if _MVIMPORT is None:
+        _MVS_STATUS = ("SDK not installed (MVS not found - install Hikrobot MVS, "
+                       "then restart the app)")
+    else:
+        # The files are there but will not load: almost always the SDK's own DLLs, which
+        # means a broken or half-removed MVS rather than a missing one. Worth separating,
+        # because the fix is reinstall rather than install.
+        _MVS_STATUS = (f"SDK broken ({_MVIMPORT} found, dll={_MVS_DLL}, "
+                       f"{type(_exc).__name__}: {_exc})")
 
 _SDK_INITIALIZED = False
 
@@ -121,7 +228,14 @@ class HikrobotCamera(IndustrialCameraBase):
                         chosen = (info, desc)
                         break
                 if chosen is None:
-                    self.last_error = f"Hikrobot camera with serial '{wanted}' not found"
+                    # Name what IS plugged in. "serial 'X' not found" on its own reads as
+                    # "no camera", and the operator goes looking at cables; the camera is
+                    # right there under a different serial, and the fix is to clear the
+                    # field (blank = first device) or paste the one below.
+                    found = ", ".join(d.identifier for _, d in devices)
+                    self.last_error = (f"Không có camera Hikrobot serial '{wanted}'. "
+                                       f"Đang cắm: {found}. Để trống ô Serial Number "
+                                       f"= dùng camera đầu tiên.")
                     return False
                 info, desc = chosen
                 cam = mv.MvCamera()
