@@ -22,3 +22,6 @@ __pycache__/
 /build/staging/
 /build/payload.zip
 /release/
+
+# Local camera recordings
+/recording/
