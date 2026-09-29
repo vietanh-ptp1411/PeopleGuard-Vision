@@ -31,6 +31,8 @@
   "visualization": {
     "color_roi_include": "#FFD400",
     "color_roi_include_occupied": "#FF3B30",
+    "color_roi_warning": "#5AC8FA",
+    "color_roi_warning_occupied": "#FF9500",
     "color_roi_exclude": "#8E8E93",
     "color_roi_editing": "#00C7FF",
     "color_person": "#34C759",

@@ -1,9 +1,9 @@
 {
   "detector": {
-    "model_path": "models/model2.pt",
+    "model_path": "D:/PeopleGuard-Vision/models/model2.pt",
     "confidence": 0.45,
     "iou": 0.5,
-    "device": "cuda",
+    "device": "cpu",
     "imgsz": 960,
     "max_fps": 8.0,
     "classes": [
@@ -19,7 +19,7 @@
   "logic": {
     "containment_mode": "foot_point",
     "intersection_threshold": 0.3,
-    "on_delay_ms": 300,
+    "on_delay_ms": 600,
     "off_delay_ms": 2000,
     "min_detection_frames": 5
   }
