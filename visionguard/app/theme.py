@@ -68,6 +68,7 @@ STATE_COLORS = {
 #: Big area-status banner fills (command bar, status panel, video overlay).
 STATUS_COLORS = {
     "CLEAR": "#0F8C3E",
+    "WARNING": "#E86A10",     # somebody in a warning zone: between green and the red of OCCUPIED
     "OCCUPIED": "#CE2A20",
     "FAULT": "#E08A00",
     "STOPPED": "#6C7B8D",
@@ -77,6 +78,7 @@ STATUS_COLORS = {
 #: Human readable banner captions.
 STATUS_CAPTIONS = {
     "CLEAR": "AREA CLEAR",
+    "WARNING": "WARNING ZONE",
     "OCCUPIED": "PERSON DETECTED",
     "FAULT": "FAULT",
     "STOPPED": "STOPPED",

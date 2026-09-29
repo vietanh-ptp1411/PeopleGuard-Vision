@@ -29,7 +29,7 @@ from ...logic.occupancy_state_machine import AreaStatus, OccupancyTracker
 from ...logic.pipeline import PipelineResult, ProcessingPipeline
 from ...plc.plc_manager import WORD_AI_ERROR, WORD_CAMERA_ERROR, PlcOutputState
 from ...roi.roi_manager import RoiManager
-from ...roi.roi_model import RoiType
+from ...roi.roi_model import RoiType, ZoneLevel
 from ...storage.event_repository import EventRepository, EventType
 from ...storage import housekeeping
 from ...storage.clip_recorder import ClipRecorder
@@ -325,10 +325,23 @@ class SystemController(QObject):
         self._recompute()
 
     def group_occupied(self) -> bool:
-        """Any camera seeing a person occupies the area - one bit for the whole group."""
+        """Any camera seeing a person in any watched zone occupies the area."""
         if self.ai_camera_mode:
             return any(sm.area_occupied for sm in self.event_states)
         return any(p.area_occupied for p in self.pipelines)
+
+    def group_level_occupied(self, level: ZoneLevel) -> bool:
+        """Any camera seeing a person in a zone of this level - one bit per level for the group.
+
+        An AI camera's regions carry no level, so everything it reports is an alarm: that is
+        what the person bit has always meant there, and a warning bit that never rises is
+        safer than one that guesses.
+        """
+        if self.ai_camera_mode:
+            return self.group_occupied() if level == ZoneLevel.ALARM else False
+        if level == ZoneLevel.ALARM:
+            return any(p.alarm_occupied for p in self.pipelines)
+        return any(p.warning_occupied for p in self.pipelines)
 
     def _sync_group_area(self) -> None:
         """Log AREA OCCUPIED / AREA CLEAR once for the group, not once per camera."""
@@ -352,7 +365,9 @@ class SystemController(QObject):
                     parts.append(f"{self.settings.camera.label(i)}: {', '.join(ids)}")
             return "; ".join(parts) or "camera event"
         total = sum(r.evaluation.in_roi for r in self._results.values())
-        return f"{total} person(s) in ROI"
+        levels = [lvl.label for lvl in (ZoneLevel.ALARM, ZoneLevel.WARNING)
+                  if any(r.evaluation.level_occupied(lvl) for r in self._results.values())]
+        return f"{total} person(s) in ROI" + (f" ({', '.join(levels)})" if levels else "")
 
     # ================================================================== wiring
     def _wire_workers(self) -> None:
@@ -679,20 +694,26 @@ class SystemController(QObject):
 
     # ================================================================== ROI slots
     def add_roi(self, type_value: str, points: List, camera: int = 0) -> None:
-        rtype = RoiType(type_value)
+        rtype = RoiType.parse(type_value)
         roi = self.roi_manager.create(rtype, points, camera=camera)
-        self.message.emit(f"{rtype.label} ROI {roi.id} created ({len(points)} points) - remember to Save ROI")
+        self.message.emit(f"{rtype.label} zone {roi.id} created ({len(points)} points) - remember to Save ROI")
 
     def update_roi_points(self, roi_id: str, points: List) -> None:
         self.roi_manager.update_points(roi_id, points)
 
     def update_roi_fields(self, roi_id: str, name: str, plc_device: str, enabled: bool,
-                          camera: int = 0) -> None:
+                          camera: int = 0, type_value: str = "") -> None:
         roi = self.roi_manager.get(roi_id)
         if roi is None:
             return
         roi.name, roi.plc_device, roi.enabled = name, plc_device.upper(), enabled
         roi.camera = max(0, int(camera))
+        if type_value:
+            # Alarm <-> Warning only. An exclusion is drawn to be ignored; turning it into a
+            # zone that trips the machine (or the reverse) by a combo box is not a field edit.
+            new_type = RoiType.parse(type_value)
+            if roi.type.is_watched and new_type.is_watched:
+                roi.type = new_type
         self.roi_manager.update(roi)
         self.message.emit(f"ROI {roi_id} updated")
 
@@ -916,8 +937,8 @@ class SystemController(QObject):
             self._ai_error = ""
         roi_names = {r.id: r.name for r in result.rois}
         for t in result.transitions:
-            if t.roi_id == OccupancyTracker.GLOBAL_ID:
-                continue      # the group's area is the OR of every camera, synced below
+            if OccupancyTracker.is_aggregate_id(t.roi_id):
+                continue      # the group's area / levels are the OR of every camera, synced below
             name = roi_names.get(t.roi_id, t.roi_id)
             if t.became_occupied:
                 logging.getLogger("ROI").info("Person entered %s (%s)", name, t.roi_id)
@@ -1077,14 +1098,15 @@ class SystemController(QObject):
             simulated = self.settings.camera.ai_camera.provider_enum == EventProviderType.MOCK
             video_matters = bool(logic.fault_on_video_loss) and not simulated
             detector_matters = bool(logic.fault_on_event_loss)
-            area_occupied = self.group_occupied()
         else:
             detector_ok = self._model_loaded and self._detecting and not self._ai_error
             has_data = self._last_result is not None
             detector_reason = self._ai_error or "AI not running"
             video_matters = True
             detector_matters = True
-            area_occupied = self.group_occupied()
+        area_occupied = self.group_occupied()
+        alarm_occupied = self.group_level_occupied(ZoneLevel.ALARM)
+        warning_occupied = self.group_level_occupied(ZoneLevel.WARNING)
         camera_ok = video_ok
 
         fault, code, reason = False, 0, ""
@@ -1126,8 +1148,12 @@ class SystemController(QObject):
             area = AreaStatus.FAULT.value
         elif starting:
             area = "STARTING"
+        elif alarm_occupied:
+            area = AreaStatus.OCCUPIED.value
+        elif warning_occupied:
+            area = AreaStatus.WARNING.value
         else:
-            area = AreaStatus.OCCUPIED.value if area_occupied else AreaStatus.CLEAR.value
+            area = AreaStatus.CLEAR.value
 
         if not running:
             system, msg = "STOPPED", ""
@@ -1178,6 +1204,8 @@ class SystemController(QObject):
         out = PlcOutputState(
             running=running,
             area_occupied=bool(area_occupied) if running else False,
+            alarm_occupied=bool(alarm_occupied) if running else False,
+            warning_occupied=bool(warning_occupied) if running else False,
             camera_ok=camera_ok,
             ai_ok=detector_ok,
             fault=fault,

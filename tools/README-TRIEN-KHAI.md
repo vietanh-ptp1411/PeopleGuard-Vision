@@ -342,15 +342,18 @@ giữ ảnh mới nhất — bỏ qua một ảnh xem trước không bao giờ 
 
 ---
 
-# Giao diện PLC — chỉ 2 thiết bị
+# Giao diện PLC — 3 thiết bị
 
 | Thiết bị | Ý nghĩa |
 |---|---|
-| **M100** | `1` khi có người trong vùng giám sát, `0` khi vùng trống |
+| **M100** | `1` khi có người trong vùng **Alarm**, `0` khi các vùng Alarm trống |
+| **M101** | `1` khi có người trong vùng **Warning**, `0` khi các vùng Warning trống |
 | **M110** | Đảo trạng thái mỗi 500 ms khi hệ thống **đang chạy VÀ nhìn được** |
 
-Không ghi gì khác. Trước đây có thêm M101 (vùng trống), M102 (camera OK), M103 (AI chạy),
-M104 (lỗi), D100 (từ trạng thái) và M200+ (từng vùng) — đã bỏ.
+M100 và M101 độc lập: một người đứng đè lên cả hai loại vùng thì cả hai cùng `1`. Site chỉ
+cần một mức thì vẽ toàn vùng Alarm, M101 sẽ nằm im ở `0` (hoặc xoá trống ô *Vùng WARNING*
+trong tab PLC để không ghi nó nữa). Không ghi gì khác. Trước đây có thêm bit vùng trống,
+M102 (camera OK), M103 (AI chạy), M104 (lỗi), D100 (từ trạng thái) và M200+ (từng vùng) — đã bỏ.
 
 ## Nhịp tim mang luôn ý nghĩa sức khoẻ
 
@@ -370,7 +373,8 @@ camera mù, không tốn thêm bit nào.
 
 ```
 Nếu M110 KHÔNG đổi trạng thái trong 2 giây  →  coi như hệ thống mù  →  xử lý như có người
-Nếu M100 = 1                                →  có người trong vùng  →  dừng máy
+Nếu M100 = 1                                →  có người trong vùng Alarm    →  dừng máy
+Nếu M101 = 1                                →  có người trong vùng Warning  →  giảm tốc / báo đèn còi
 ```
 
 Chỉ đọc M100 mà bỏ qua watchdog M110 là **bỏ mất toàn bộ khả năng phát hiện camera hỏng**.

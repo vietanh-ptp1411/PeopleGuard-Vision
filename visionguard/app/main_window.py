@@ -447,6 +447,7 @@ class MainWindow(QMainWindow):
         # ROI panel + video editor
         rp, v = self.roi_panel, self.video
         rp.add_include_requested.connect(lambda: self._begin_drawing(RoiType.INCLUDE))
+        rp.add_warning_requested.connect(lambda: self._begin_drawing(RoiType.WARNING))
         rp.add_exclude_requested.connect(lambda: self._begin_drawing(RoiType.EXCLUDE))
         rp.finish_requested.connect(v.finish_drawing)
         rp.cancel_requested.connect(v.cancel_drawing)
@@ -762,7 +763,10 @@ class MainWindow(QMainWindow):
         bare = count - len({int(getattr(r, "camera", 0)) for r in includes})   # cameras with no zone
         if not includes:
             return ("ok", "Toàn khung hình (chưa vẽ vùng)", "")
-        detail = f"{len(includes)} vùng" + (f" + {len(excludes)} loại trừ" if excludes else "")
+        alarms = sum(1 for r in includes if r.is_alarm)
+        warnings = len(includes) - alarms
+        parts = ([f"{alarms} alarm"] if alarms else []) + ([f"{warnings} warning"] if warnings else [])
+        detail = " + ".join(parts) + (f" + {len(excludes)} loại trừ" if excludes else "")
         if bare > 0:
             detail += f" · {bare} camera toàn khung"
         dirty = self.ctrl.roi_manager.dirty

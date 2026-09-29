@@ -400,16 +400,19 @@ API (`BasePLC`): `connect() disconnect() is_connected() read_bit() write_bit() r
 
 | Device | Ý nghĩa |
 |---|---|
-| `M100` | PERSON_PRESENT / AREA_OCCUPIED |
-| `M101` | AREA_CLEAR (Mode B) – **không bao giờ** ON cùng lúc với M100 |
+| `M100` | ALARM: có người trong vùng **Alarm** (PERSON_PRESENT / AREA_OCCUPIED) |
+| `M101` | WARNING: có người trong vùng **Warning** – độc lập với M100 |
+| `device_clear` (trống) | AREA_CLEAR (Mode B) – ON khi không ai ở cả hai loại vùng, **không bao giờ** ON cùng M100/M101 |
 | `M102` | Camera connected |
 | `M103` | AI running (system RUNNING và AI có kết quả) |
 | `M104` | System FAULT |
 | `M110` | Heartbeat – PC toggle 0/1 mỗi 500 ms (chỉnh được, bật/tắt) |
-| `D100` | Status word: `0` CLEAR, `1` OCCUPIED, `2` CAMERA ERROR, `3` PLC ERROR, `4` AI ERROR, `5` NOT RUNNING |
-| ROI `plc_device` | mỗi include ROI có thể ghi bit riêng (vd `M200`, `M201`) |
+| `D100` | Status word: `0` CLEAR, `1` OCCUPIED (Alarm), `6` WARNING, `2` CAMERA ERROR, `3` PLC ERROR, `4` AI ERROR, `5` NOT RUNNING |
+| ROI `plc_device` | mỗi vùng Alarm / Warning có thể ghi bit riêng (vd `M200`, `M201`) |
 
-Signal mode **A** (1 bit M100) hoặc **B** (M100 + M101). Fail-safe: khi FAULT bit PERSON giữ giá trị cuối (mặc định)
+Vùng vẽ ở tab Zones có hai mức: **Alarm** (`type: include` trong `roi_config.json`, giữ tương thích với file cũ) và **Warning**
+(`type: warning`). Cơ chế bắt người, debounce và exclusion giống nhau; chỉ khác bit đích.
+Signal mode **A** (ALARM + WARNING) hoặc **B** (thêm CLEAR). Fail-safe: khi FAULT bit ALARM/WARNING giữ giá trị cuối (mặc định)
 hoặc ép ON/OFF; bit CLEAR luôn OFF khi FAULT; `D100` = mã lỗi. Khi STOP SYSTEM: `M103 = 0`, `M101 = 0`, `D100 = 5`,
 PERSON giữ nguyên. PLC nên coi **heartbeat đứng > 2 s hoặc M103 = 0 hoặc M104 = 1** là "PC không giám sát" → về trạng thái an toàn.
 

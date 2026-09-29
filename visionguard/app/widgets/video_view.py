@@ -181,7 +181,7 @@ class VideoView(QWidget):
         self._draft = []
         self._set_mode(EditorMode.DRAWING)
         self.status_message.emit(
-            f"Drawing {rtype.label} ROI: left-click to add points, double-click / Enter to finish, right-click to undo, Esc to cancel"
+            f"Drawing {rtype.label} zone: left-click to add points, double-click / Enter to finish, right-click to undo, Esc to cancel"
         )
         self.setFocus()
 
@@ -420,9 +420,17 @@ class VideoView(QWidget):
         if roi.is_exclude:
             return QColor(self.vis.color_roi_exclude)
         st = self._roi_states.get(roi.id)
-        if st is not None and st.occupied:
-            return QColor(self.vis.color_roi_include_occupied)
-        return QColor(self.vis.color_roi_include)
+        occupied = st is not None and st.occupied
+        if roi.is_warning:
+            return QColor(self.vis.color_roi_warning_occupied if occupied else self.vis.color_roi_warning)
+        return QColor(self.vis.color_roi_include_occupied if occupied else self.vis.color_roi_include)
+
+    def _hits_alarm(self, roi_ids) -> bool:
+        """Is at least one of these zones an alarm zone (as opposed to warning only)?"""
+        wanted = set(roi_ids)
+        if FULL_FRAME_ID in wanted:
+            return True
+        return any(r.id in wanted and r.is_alarm for r in self._rois)
 
     # ================================================================== painting
     def paintEvent(self, _ev) -> None:  # noqa: N802
@@ -491,8 +499,9 @@ class VideoView(QWidget):
         has_include = any(r.is_include and r.enabled and r.is_valid() for r in self._rois)
         if self._display_mode == "result" and self._image is not None and not has_include:
             self._paint_full_frame(p)
-        # exclusions first so include outlines stay visible on top
-        ordered = [r for r in self._rois if r.is_exclude] + [r for r in self._rois if r.is_include]
+        # exclusions first, then warning, then alarm, so the outline that matters most is on top
+        ordered = ([r for r in self._rois if r.is_exclude] + [r for r in self._rois if r.is_warning]
+                   + [r for r in self._rois if r.is_alarm])
         for roi in ordered:
             if len(roi.points) < 2:
                 continue
@@ -534,7 +543,7 @@ class VideoView(QWidget):
             # in the Zones panel and in every event row.
             title = roi.name.strip() or roi.id
             lines = [title + (f"  [{roi.plc_device}]" if roi.plc_device else "")]
-            if roi.is_exclude:
+            if not roi.is_alarm:
                 lines.append(roi.type.label.upper())   # type, not state - colour alone is subtle
             if not roi.enabled:
                 lines.append("DISABLED")               # a dotted outline is easy to miss
@@ -568,14 +577,17 @@ class VideoView(QWidget):
         for i, q in enumerate(pts):
             p.drawEllipse(q, 5, 5)
             self._draw_label(p, QPointF(q.x() + 8, q.y() - 8), [f"P{i + 1}"], color, small=True)
-        hint = f"{self._draw_type.label} ROI - {len(pts)} point(s) - double-click/Enter to finish, Esc to cancel"
+        hint = f"{self._draw_type.label} zone - {len(pts)} point(s) - double-click/Enter to finish, Esc to cancel"
         self._draw_label(p, QPointF(12, self.height() - 30), [hint], color, small=True)
 
     def _paint_detections(self, p: QPainter, dets: Sequence[EvaluatedDetection]) -> None:
         lw = max(1, int(self.vis.line_width))
         for i, ev in enumerate(dets):
             det = ev.detection
-            if ev.status == DetectionZoneStatus.IN_ROI:
+            warning_only = ev.status == DetectionZoneStatus.IN_ROI and not self._hits_alarm(ev.roi_ids)
+            if warning_only:
+                color = QColor(self.vis.color_roi_warning_occupied)
+            elif ev.status == DetectionZoneStatus.IN_ROI:
                 color = QColor(self.vis.color_person_in_roi)
             elif ev.status == DetectionZoneStatus.IGNORED_EXCLUSION:
                 color = QColor(self.vis.color_person_ignored)
@@ -596,7 +608,9 @@ class VideoView(QWidget):
                 continue
             ident = f"#{det.track_id}" if (self.vis.show_ids and det.track_id is not None) else f"{i + 1}"
             conf = f"  {det.confidence:.2f}" if self.vis.show_confidence else ""
-            if ev.status == DetectionZoneStatus.IN_ROI:
+            if warning_only:
+                lines = ["PERSON IN WARNING ZONE", ", ".join(ev.roi_ids) + conf]
+            elif ev.status == DetectionZoneStatus.IN_ROI:
                 lines = ["PERSON IN AREA", ", ".join(ev.roi_ids) + conf]
             elif ev.status == DetectionZoneStatus.IGNORED_EXCLUSION:
                 lines = ["IGNORED - EXCLUSION ZONE", f"Person {ident}{conf}"]

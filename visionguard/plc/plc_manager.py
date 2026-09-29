@@ -3,7 +3,8 @@
 Runs inside the PLC worker thread. It never touches the UI.
 
 Word status codes (device_status_word):
-    0 CLEAR, 1 OCCUPIED, 2 CAMERA ERROR, 3 PLC ERROR, 4 AI ERROR, 5 NOT RUNNING
+    0 CLEAR, 1 OCCUPIED (alarm zone), 2 CAMERA ERROR, 3 PLC ERROR, 4 AI ERROR, 5 NOT RUNNING,
+    6 WARNING (warning zone only)
 """
 from __future__ import annotations
 
@@ -26,13 +27,16 @@ WORD_CAMERA_ERROR = 2
 WORD_PLC_ERROR = 3
 WORD_AI_ERROR = 4
 WORD_NOT_RUNNING = 5
+WORD_WARNING = 6
 
 
 @dataclass
 class PlcOutputState:
     """Everything the PLC needs to know, produced by the pipeline/controller."""
     running: bool = False               # system started (monitoring active)
-    area_occupied: bool = False         # debounced global occupancy
+    area_occupied: bool = False         # debounced: somebody in ANY watched zone (alarm or warning)
+    alarm_occupied: bool = False        # debounced: somebody in an ALARM zone   -> device_person
+    warning_occupied: bool = False      # debounced: somebody in a WARNING zone  -> device_warning
     camera_ok: bool = False
     ai_ok: bool = False
     fault: bool = False
@@ -48,23 +52,41 @@ class PlcOutputMapper:
     """Pure function: PlcOutputState + PlcConfig -> {device: value}. Values None = hold."""
 
     @staticmethod
+    def occupancy_bit(state: PlcOutputState, cfg: PlcConfig, occupied: bool) -> Optional[int]:
+        """The value of any "somebody is there" bit, with the stop / fault policy applied.
+
+        Shared by the ALARM bit, the WARNING bit and the per-zone bits so that all three
+        kinds of zone fail the same way: a stopped system keeps the last value, a fault
+        does whatever the fail-safe setting says, and only a running, healthy system is
+        allowed to say 0.
+        """
+        if not state.running:
+            return HOLD                                       # stopped: keep last value
+        if state.fault:
+            mode = cfg.failsafe.person_output_on_fault
+            return 1 if mode == FaultPersonOutput.ON.value else 0 if mode == FaultPersonOutput.OFF.value else HOLD
+        return 1 if occupied else 0
+
+    @staticmethod
     def map(state: PlcOutputState, cfg: PlcConfig) -> Dict[str, Optional[int]]:
         m = cfg.mapping
         out: Dict[str, Optional[int]] = {}
         dual = cfg.signal_mode == SignalMode.DUAL_BIT.value
+        bit = PlcOutputMapper.occupancy_bit
 
-        # --- PERSON / OCCUPIED bit ------------------------------------------------
-        if not state.running:
-            person: Optional[int] = HOLD                      # stopped: keep last value
-        elif state.fault:
-            mode = cfg.failsafe.person_output_on_fault
-            person = 1 if mode == FaultPersonOutput.ON.value else 0 if mode == FaultPersonOutput.OFF.value else HOLD
-        else:
-            person = 1 if state.area_occupied else 0
+        # --- ALARM bit (PERSON): somebody in an alarm zone ---------------------------
         if m.device_person:
-            out[m.device_person] = person
+            out[m.device_person] = bit(state, cfg, state.alarm_occupied)
 
-        # --- AREA CLEAR bit (dual-bit mode) -----------------------------------------
+        # --- WARNING bit: somebody in a warning zone ---------------------------------
+        # Independent of the alarm bit: one person can be in both kinds of zone at once,
+        # and a ladder that slows on WARNING and stops on ALARM wants to see both.
+        if m.device_warning:
+            value = bit(state, cfg, state.warning_occupied)
+            if m.device_warning not in out or out[m.device_warning] is HOLD:
+                out[m.device_warning] = value
+
+        # --- AREA CLEAR bit (dual-bit mode): nobody in ANY watched zone ---------------
         if dual and m.device_clear:
             if not state.running:
                 clear: Optional[int] = 0
@@ -88,8 +110,12 @@ class PlcOutputMapper:
                 word = WORD_NOT_RUNNING
             elif state.fault:
                 word = state.fault_code or WORD_AI_ERROR
+            elif state.alarm_occupied:
+                word = WORD_OCCUPIED
+            elif state.warning_occupied:
+                word = WORD_WARNING
             else:
-                word = WORD_OCCUPIED if state.area_occupied else WORD_CLEAR
+                word = WORD_CLEAR
             out[m.device_status_word] = word
 
         # --- per-ROI bits ------------------------------------------------------------
@@ -97,13 +123,7 @@ class PlcOutputMapper:
             for rid, dev in state.roi_devices.items():
                 if not dev:
                     continue
-                if not state.running:
-                    val: Optional[int] = HOLD
-                elif state.fault:
-                    mode = cfg.failsafe.person_output_on_fault
-                    val = 1 if mode == FaultPersonOutput.ON.value else 0 if mode == FaultPersonOutput.OFF.value else HOLD
-                else:
-                    val = 1 if state.roi_occupied.get(rid, False) else 0
+                val = bit(state, cfg, state.roi_occupied.get(rid, False))
                 if dev not in out or out[dev] is HOLD:
                     out[dev] = val
         return out

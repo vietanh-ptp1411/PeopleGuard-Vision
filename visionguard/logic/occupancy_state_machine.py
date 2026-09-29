@@ -29,7 +29,8 @@ class OccupancyState(str, Enum):
 class AreaStatus(str, Enum):
     """System-level area status shown in the UI and mapped to PLC."""
     CLEAR = "CLEAR"
-    OCCUPIED = "OCCUPIED"
+    WARNING = "WARNING"       # somebody in a warning zone, nobody in an alarm zone
+    OCCUPIED = "OCCUPIED"     # somebody in an alarm zone
     FAULT = "FAULT"
     STOPPED = "STOPPED"
 
@@ -103,19 +104,28 @@ class OccupancyStateMachine:
 
 
 class OccupancyTracker:
-    """Manages one state machine per include-ROI plus a global 'any ROI' machine."""
+    """One state machine per watched ROI, one per zone level, plus a global 'any ROI' machine.
+
+    The level machines ("alarm", "warning") are what the PLC bits follow. They are debounced
+    on the raw union of their zones, the same way the global machine is, so a person who
+    steps from one alarm zone straight into another keeps the ALARM bit up without a gap.
+    """
 
     GLOBAL_ID = "__AREA__"
+    LEVEL_PREFIX = "__LEVEL__"
 
     def __init__(self, config: Optional[DebounceConfig] = None) -> None:
         self.config = (config or DebounceConfig()).clamp()
         self._machines: Dict[str, OccupancyStateMachine] = {}
+        self._levels: Dict[str, OccupancyStateMachine] = {}
         self._global = OccupancyStateMachine(self.GLOBAL_ID, self.config)
 
     def set_config(self, config: DebounceConfig) -> None:
         self.config = config.clamp()
         self._global.set_config(self.config)
         for m in self._machines.values():
+            m.set_config(self.config)
+        for m in self._levels.values():
             m.set_config(self.config)
 
     def sync_rois(self, roi_ids: List[str]) -> None:
@@ -127,12 +137,29 @@ class OccupancyTracker:
             if rid not in roi_ids:
                 del self._machines[rid]
 
-    def update(self, roi_counts: Dict[str, int], now: Optional[float] = None) -> List[StateTransition]:
+    def update(self, roi_counts: Dict[str, int], now: Optional[float] = None,
+               roi_levels: Optional[Dict[str, str]] = None) -> List[StateTransition]:
+        """Feed one frame. `roi_levels` maps a ROI id to its level; a ROI without one is alarm."""
         now = time.monotonic() if now is None else now
+        roi_levels = roi_levels or {}
         self.sync_rois(list(roi_counts.keys()))
         transitions: List[StateTransition] = []
         for rid, count in roi_counts.items():
             t = self._machines[rid].update(count > 0, now)
+            if t:
+                transitions.append(t)
+        # Level machines. Every level that has ever been fed keeps its machine, so a level
+        # whose last zone was just deleted still debounces down to CLEAR instead of vanishing
+        # while OCCUPIED and leaving its PLC bit wherever it was.
+        raw_by_level: Dict[str, bool] = {lvl: False for lvl in self._levels}
+        for rid, count in roi_counts.items():
+            lvl = roi_levels.get(rid, "alarm")
+            raw_by_level[lvl] = raw_by_level.get(lvl, False) or count > 0
+        for lvl, raw in raw_by_level.items():
+            machine = self._levels.get(lvl)
+            if machine is None:
+                machine = self._levels[lvl] = OccupancyStateMachine(self.LEVEL_PREFIX + lvl, self.config)
+            t = machine.update(raw, now)
             if t:
                 transitions.append(t)
         any_raw = any(c > 0 for c in roi_counts.values())
@@ -145,6 +172,13 @@ class OccupancyTracker:
         self._global.reset()
         for m in self._machines.values():
             m.reset()
+        for m in self._levels.values():
+            m.reset()
+
+    @classmethod
+    def is_aggregate_id(cls, roi_id: str) -> bool:
+        """True for the ids of the global and level machines - they are not zones."""
+        return roi_id == cls.GLOBAL_ID or roi_id.startswith(cls.LEVEL_PREFIX)
 
     # ------------------------------------------------------------------ views
     @property
@@ -163,3 +197,15 @@ class OccupancyTracker:
 
     def roi_occupied(self) -> Dict[str, bool]:
         return {rid: m.is_occupied for rid, m in self._machines.items()}
+
+    # ------------------------------------------------------------------ levels
+    def level_occupied(self, level: str) -> bool:
+        m = self._levels.get(str(level))
+        return m.is_occupied if m is not None else False
+
+    def level_state(self, level: str) -> OccupancyState:
+        m = self._levels.get(str(level))
+        return m.state if m is not None else OccupancyState.CLEAR
+
+    def level_states(self) -> Dict[str, OccupancyState]:
+        return {lvl: m.state for lvl, m in self._levels.items()}

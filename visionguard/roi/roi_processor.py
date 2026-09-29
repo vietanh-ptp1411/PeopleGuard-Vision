@@ -3,8 +3,11 @@
 Order of evaluation (per detection):
     1. compute the test point (foot / center) or the bbox for intersection mode
     2. if it falls in any enabled EXCLUDE ROI  -> IGNORED_EXCLUSION
-    3. else if it falls in any enabled INCLUDE ROI -> IN_ROI (list of ROI ids)
+    3. else if it falls in any enabled ALARM or WARNING ROI -> IN_ROI (list of ROI ids)
     4. else -> OUTSIDE
+
+Alarm and warning zones are evaluated exactly the same way; the evaluation only records
+which level each zone has (`roi_levels`) so the occupancy tracker can raise one bit per level.
 """
 from __future__ import annotations
 
@@ -14,13 +17,14 @@ from typing import Dict, List, Optional, Sequence, Tuple
 from ..config.schemas import ContainmentMode
 from ..vision.detection import Detection, DetectionZoneStatus, EvaluatedDetection
 from .geometry import bbox_polygon_intersection_ratio, point_in_polygon
-from .roi_model import Roi, full_frame_roi
+from .roi_model import Roi, ZoneLevel, full_frame_roi
 
 
 @dataclass
 class RoiEvaluation:
     detections: List[EvaluatedDetection] = field(default_factory=list)
-    roi_counts: Dict[str, int] = field(default_factory=dict)   # include ROI id -> persons inside
+    roi_counts: Dict[str, int] = field(default_factory=dict)   # watched ROI id -> persons inside
+    roi_levels: Dict[str, str] = field(default_factory=dict)   # watched ROI id -> ZoneLevel value
     total: int = 0
     in_roi: int = 0
     outside: int = 0
@@ -32,6 +36,13 @@ class RoiEvaluation:
 
     def occupied_roi_ids(self) -> List[str]:
         return [rid for rid, n in self.roi_counts.items() if n > 0]
+
+    def level_count(self, level: ZoneLevel) -> int:
+        """Persons inside zones of one level (a person in two zones counts twice)."""
+        return sum(n for rid, n in self.roi_counts.items() if self.roi_levels.get(rid) == level.value)
+
+    def level_occupied(self, level: ZoneLevel) -> bool:
+        return self.level_count(level) > 0
 
 
 class RoiProcessor:
@@ -53,7 +64,10 @@ class RoiProcessor:
             # a guard that looks like it is working and is not. Exclusions still apply.
             includes = [full_frame_roi()]
         excludes = [r for r in rois if r.enabled and r.is_exclude and r.is_valid()]
-        result = RoiEvaluation(roi_counts={r.id: 0 for r in includes})
+        result = RoiEvaluation(
+            roi_counts={r.id: 0 for r in includes},
+            roi_levels={r.id: (r.level or ZoneLevel.ALARM).value for r in includes},
+        )
         w = float(max(1, width))
         h = float(max(1, height))
 

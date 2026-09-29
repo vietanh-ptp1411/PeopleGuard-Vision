@@ -15,6 +15,15 @@ log = logging.getLogger("ROI")
 Listener = Callable[[], None]
 
 
+def _default_name(rtype: RoiType, rid: str) -> str:
+    number = rid.split("_")[-1]
+    if rtype == RoiType.INCLUDE:
+        return rid.replace("_", " ")          # "ROI 001", as it has always been
+    if rtype == RoiType.WARNING:
+        return f"Warning {number}"
+    return f"Exclusion {number}"
+
+
 class RoiManager:
     """Owns the list of ROIs. UI edits it; the pipeline reads immutable snapshots."""
 
@@ -63,7 +72,14 @@ class RoiManager:
         return [r for r in self.all() if int(getattr(r, "camera", 0)) == int(camera)]
 
     def include_rois(self) -> List[Roi]:
+        """Every watched zone, alarm and warning alike."""
         return [r for r in self.all() if r.is_include]
+
+    def alarm_rois(self) -> List[Roi]:
+        return [r for r in self.all() if r.is_alarm]
+
+    def warning_rois(self) -> List[Roi]:
+        return [r for r in self.all() if r.is_warning]
 
     def exclude_rois(self) -> List[Roi]:
         return [r for r in self.all() if r.is_exclude]
@@ -86,7 +102,7 @@ class RoiManager:
             rid = new_roi_id(rtype, self.ids())
             roi = Roi(
                 id=rid,
-                name=name or (rid.replace("_", " ") if rtype == RoiType.INCLUDE else f"Exclusion {rid.split('_')[-1]}"),
+                name=name or _default_name(rtype, rid),
                 type=rtype,
                 points=[(float(x), float(y)) for x, y in points],
                 plc_device=plc_device.upper(),

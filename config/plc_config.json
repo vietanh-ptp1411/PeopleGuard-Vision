@@ -25,6 +25,7 @@
   },
   "mapping": {
     "device_person": "M100",
+    "device_warning": "M101",
     "device_heartbeat": "M110",
     "device_clear": "",
     "device_camera_ok": "",

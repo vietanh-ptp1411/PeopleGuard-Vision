@@ -17,7 +17,7 @@ from PySide6.QtWidgets import (QCheckBox, QComboBox, QDoubleSpinBox, QFormLayout
 
 from ...config.schemas import FaultPersonOutput, FrameFormat, PlcConfig, SignalMode
 from ...plc.device_address import is_valid_device
-from ..theme import COLOR_ERROR, COLOR_OK, COLOR_TEXT_DIM
+from ..theme import COLOR_ERROR, COLOR_OK, COLOR_TEXT_DIM, COLOR_WARN
 from .form_helpers import AdvancedSection, advanced_checkbox, hint, page_header
 from .io_test_widget import IoTestWidget
 
@@ -180,14 +180,17 @@ class PlcConfigWidget(QWidget):
         g_map = QGroupBox("PLC DEVICES")
         fm = QFormLayout(g_map)
         self.edt_person = QLineEdit()
+        self.edt_warning = QLineEdit()
         self.edt_clear = QLineEdit()
-        fm.addRow("Có người (PERSON)", self.edt_person)
+        fm.addRow("Vùng ALARM (PERSON)", self.edt_person)
+        fm.addRow("Vùng WARNING", self.edt_warning)
         fm.addRow("Hết người (CLEAR)", self.edt_clear)
-        fm.addRow(hint("Hai bit chính gửi sang PLC. Có người: PERSON = ON, CLEAR = OFF."))
+        fm.addRow(hint("Mỗi loại vùng một bit: có người trong vùng Alarm → bit ALARM = ON; "
+                       "trong vùng Warning → bit WARNING = ON. CLEAR = ON khi không ai trong vùng nào (Mode B)."))
 
         self.cmb_signal = QComboBox()
-        self.cmb_signal.addItem("Mode A - chỉ 1 bit PERSON", SignalMode.SINGLE_BIT.value)
-        self.cmb_signal.addItem("Mode B - PERSON + CLEAR", SignalMode.DUAL_BIT.value)
+        self.cmb_signal.addItem("Mode A - bit ALARM + WARNING", SignalMode.SINGLE_BIT.value)
+        self.cmb_signal.addItem("Mode B - thêm bit CLEAR", SignalMode.DUAL_BIT.value)
         self.edt_camera = QLineEdit()
         self.edt_ai = QLineEdit()
         self.edt_fault = QLineEdit()
@@ -195,7 +198,7 @@ class PlcConfigWidget(QWidget):
         self.edt_word = QLineEdit()
         self.chk_word = QCheckBox("Ghi status word")
         self.chk_roi_devices = QCheckBox("Bit riêng từng vùng")
-        self.chk_roi_devices.setToolTip("Ngoài bit PERSON chung, ghi thêm một bit cho mỗi vùng")
+        self.chk_roi_devices.setToolTip("Ngoài bit ALARM / WARNING chung, ghi thêm một bit cho mỗi vùng")
         fm.addRow("Signal mode", self.cmb_signal)
         fm.addRow("Camera OK", self.edt_camera)
         fm.addRow("AI Running", self.edt_ai)
@@ -206,8 +209,8 @@ class PlcConfigWidget(QWidget):
         fm.addRow("", self.chk_roi_devices)
         self.advanced.rows(fm, self.cmb_signal, self.edt_camera, self.edt_ai, self.edt_fault, self.edt_hb,
                            self.chk_word, self.edt_word, self.chk_roi_devices)
-        self.lbl_word_hint = hint("Status word: 0 CLEAR, 1 OCCUPIED, 2 CAMERA ERROR, 3 PLC ERROR, "
-                                  "4 AI ERROR, 5 STOPPED.")
+        self.lbl_word_hint = hint("Status word: 0 CLEAR, 1 OCCUPIED (alarm), 2 CAMERA ERROR, 3 PLC ERROR, "
+                                  "4 AI ERROR, 5 STOPPED, 6 WARNING.")
         fm.addRow(self.lbl_word_hint)
         self.advanced.row(fm, self.lbl_word_hint)
         lay.addWidget(g_map)
@@ -228,7 +231,7 @@ class PlcConfigWidget(QWidget):
         self.chk_clear_off.setToolTip("Khi hệ thống lỗi, ép bit CLEAR về 0 - không bao giờ báo vùng trống")
         fh.addRow("", self.chk_hb)
         fh.addRow("Chu kỳ heartbeat", self.spn_hb)
-        fh.addRow("Bit PERSON khi FAULT", self.cmb_fault_person)
+        fh.addRow("Bit ALARM/WARNING khi FAULT", self.cmb_fault_person)
         fh.addRow("", self.chk_clear_off)
         fh.addRow(hint("Khi mất camera hoặc mất kênh sự kiện, phần mềm không bao giờ tự báo HẾT NGƯỜI."))
         self.advanced.widget(g_hb)
@@ -302,8 +305,9 @@ class PlcConfigWidget(QWidget):
             it_val = QTableWidgetItem(text)
             it_val.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             if val:
-                it_val.setForeground(QColor(COLOR_ERROR if dev == self._config.mapping.device_person
-                                            else COLOR_OK))
+                m = self._config.mapping
+                it_val.setForeground(QColor(COLOR_ERROR if dev == m.device_person
+                                            else COLOR_WARN if dev == m.device_warning else COLOR_OK))
             else:
                 it_val.setForeground(QColor(COLOR_TEXT_DIM))
             self.tbl_mem.setItem(row, 0, QTableWidgetItem(dev))
@@ -313,7 +317,8 @@ class PlcConfigWidget(QWidget):
     def _meanings(self) -> Dict[str, str]:
         m = self._config.mapping
         return {
-            m.device_person: "CO NGUOI / AREA OCCUPIED",
+            m.device_person: "CO NGUOI VUNG ALARM / AREA OCCUPIED",
+            m.device_warning: "CO NGUOI VUNG WARNING",
             m.device_clear: "HET NGUOI / AREA CLEAR",
             m.device_camera_ok: "Camera connected",
             m.device_ai_running: "AI running",
@@ -342,6 +347,7 @@ class PlcConfigWidget(QWidget):
         idx = self.cmb_signal.findData(cfg.signal_mode)
         self.cmb_signal.setCurrentIndex(max(0, idx))
         self.edt_person.setText(m.device_person)
+        self.edt_warning.setText(m.device_warning)
         self.edt_clear.setText(m.device_clear)
         self.edt_camera.setText(m.device_camera_ok)
         self.edt_ai.setText(m.device_ai_running)
@@ -381,6 +387,7 @@ class PlcConfigWidget(QWidget):
         cfg.signal_mode = str(self.cmb_signal.currentData())
         m = cfg.mapping
         m.device_person = self.edt_person.text().strip().upper()
+        m.device_warning = self.edt_warning.text().strip().upper()
         m.device_clear = self.edt_clear.text().strip().upper()
         m.device_camera_ok = self.edt_camera.text().strip().upper()
         m.device_ai_running = self.edt_ai.text().strip().upper()

@@ -1,4 +1,10 @@
-"""ROI tab: list of ROIs, per-ROI fields (name / PLC device / enabled) and editor actions."""
+"""ROI tab: list of ROIs, per-ROI fields (name / type / PLC device / enabled) and editor actions.
+
+Three kinds of zone can be drawn. ALARM and WARNING are watched the same way - same
+containment test, same debounce - and differ only in which PLC bit they raise, so a ladder
+can slow the machine for a warning and stop it for an alarm. EXCLUSION zones are where a
+person is ignored.
+"""
 from __future__ import annotations
 
 from typing import Dict, List
@@ -12,13 +18,19 @@ from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QFormLay
 
 from ...logic.occupancy_state_machine import OccupancyState
 from ...plc.device_address import is_valid_device
-from ...roi.roi_model import Roi
+from ...roi.roi_model import Roi, RoiType
 from ..theme import COLOR_ERROR, COLOR_OK, COLOR_TEXT_DIM, COLOR_TEXT_MUTED, COLOR_WARN
 from .form_helpers import page_header
 
+#: Text colour of the Type cell, so the two watched levels are told apart at a glance.
+TYPE_COLORS = {RoiType.INCLUDE: COLOR_ERROR, RoiType.WARNING: COLOR_WARN, RoiType.EXCLUDE: COLOR_TEXT_MUTED}
+
+COL_ID, COL_CAM, COL_NAME, COL_TYPE, COL_ON, COL_PLC, COL_PTS, COL_STATE = range(8)
+
 
 class RoiPanel(QWidget):
-    add_include_requested = Signal()
+    add_include_requested = Signal()     # a new ALARM zone
+    add_warning_requested = Signal()     # a new WARNING zone
     add_exclude_requested = Signal()
     finish_requested = Signal()
     cancel_requested = Signal()
@@ -27,8 +39,8 @@ class RoiPanel(QWidget):
     clear_requested = Signal()
     save_requested = Signal()
     selection_changed = Signal(str)
-    fields_changed = Signal(str, str, str, bool, int)   # id, name, plc_device, enabled, camera
-    target_camera_changed = Signal(int)                 # draw the next zone on this camera
+    fields_changed = Signal(str, str, str, bool, int, str)   # id, name, plc_device, enabled, camera, type
+    target_camera_changed = Signal(int)                      # draw the next zone on this camera
 
     COLS = ("ID", "Cam", "Name", "Type", "On", "PLC", "Pts", "State")
 
@@ -50,7 +62,7 @@ class RoiPanel(QWidget):
         lay = QVBoxLayout(body)
         lay.setSpacing(8)
 
-        lay.addWidget(page_header("Zones", "Vẽ polygon: người trong vùng sẽ bật bit PLC"))
+        lay.addWidget(page_header("Zones", "Người trong vùng Alarm bật bit ALARM, trong vùng Warning bật bit WARNING"))
         # Which camera the next zone goes on. This used to be a sentence telling you to
         # click another camera's tile - on a page where the picture is zoomed to one camera
         # and there is no other tile to click. Getting to camera 2 meant Overview, un-zoom,
@@ -70,9 +82,13 @@ class RoiPanel(QWidget):
 
         g_act = QGroupBox("ROI EDITOR")
         gl = QGridLayout(g_act)
-        self.btn_add = QPushButton("+ Zone")
+        self.btn_add = QPushButton("+ Alarm")
         self.btn_add.setProperty("class", "primary")
+        self.btn_add.setToolTip("Vùng ALARM: có người → bật bit ALARM (dừng máy)")
+        self.btn_add_warn = QPushButton("+ Warning")
+        self.btn_add_warn.setToolTip("Vùng WARNING: có người → bật bit WARNING (cảnh báo / giảm tốc)")
         self.btn_add_ex = QPushButton("+ Exclusion")
+        self.btn_add_ex.setToolTip("Vùng loại trừ: người đứng trong đây bị bỏ qua")
         self.btn_finish = QPushButton("Finish")
         self.btn_cancel = QPushButton("Cancel")
         self.btn_edit = QPushButton("Edit")
@@ -83,23 +99,24 @@ class RoiPanel(QWidget):
         self.btn_clear = QPushButton("Clear all")
         self.btn_save = QPushButton("Save")
         self.btn_save.setProperty("class", "success")
-        # Two tight rows beat one column of full width buttons: the same actions read as a
-        # toolbar instead of a menu, and the ROI list stays above the fold.
-        for b in (self.btn_add, self.btn_add_ex, self.btn_finish, self.btn_cancel,
+        # Three tight rows: the three kinds of zone to draw, the drawing controls, the
+        # list actions. A toolbar rather than a menu, and the ROI list stays above the fold.
+        for b in (self.btn_add, self.btn_add_warn, self.btn_add_ex, self.btn_finish, self.btn_cancel,
                   self.btn_edit, self.btn_delete, self.btn_clear, self.btn_save):
             b.setProperty("size", "sm")
         gl.addWidget(self.btn_add, 0, 0)
-        gl.addWidget(self.btn_add_ex, 0, 1)
-        gl.addWidget(self.btn_finish, 0, 2)
-        gl.addWidget(self.btn_cancel, 0, 3)
-        gl.addWidget(self.btn_edit, 1, 0)
-        gl.addWidget(self.btn_delete, 1, 1)
-        gl.addWidget(self.btn_clear, 1, 2)
-        gl.addWidget(self.btn_save, 1, 3)
+        gl.addWidget(self.btn_add_warn, 0, 1)
+        gl.addWidget(self.btn_add_ex, 0, 2)
+        gl.addWidget(self.btn_finish, 1, 0)
+        gl.addWidget(self.btn_cancel, 1, 1)
+        gl.addWidget(self.btn_edit, 1, 2)
+        gl.addWidget(self.btn_delete, 2, 0)
+        gl.addWidget(self.btn_clear, 2, 1)
+        gl.addWidget(self.btn_save, 2, 2)
         self.lbl_hint = QLabel("Click trái trên hình để thêm điểm, double-click / Enter để đóng polygon.")
         self.lbl_hint.setWordWrap(True)
         self.lbl_hint.setStyleSheet(f"color: {COLOR_TEXT_DIM}; font-size: 9pt;")
-        gl.addWidget(self.lbl_hint, 2, 0, 1, 4)
+        gl.addWidget(self.lbl_hint, 3, 0, 1, 3)
         lay.addWidget(g_act)
 
         g_list = QGroupBox("ROI LIST")
@@ -110,7 +127,7 @@ class RoiPanel(QWidget):
         header.setStretchLastSection(False)
         for col in range(len(self.COLS)):
             header.setSectionResizeMode(
-                col, QHeaderView.ResizeMode.Stretch if col == 2 else QHeaderView.ResizeMode.ResizeToContents)
+                col, QHeaderView.ResizeMode.Stretch if col == COL_NAME else QHeaderView.ResizeMode.ResizeToContents)
         self.table.verticalHeader().setVisible(False)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
@@ -124,8 +141,12 @@ class RoiPanel(QWidget):
         f = QFormLayout(g_fields)
         self.lbl_id = QLabel("-")
         self.edt_name = QLineEdit()
+        self.cmb_type = QComboBox()
+        self.cmb_type.addItem("Alarm - bit ALARM", RoiType.INCLUDE.value)
+        self.cmb_type.addItem("Warning - bit WARNING", RoiType.WARNING.value)
+        self.cmb_type.setToolTip("Đổi mức của vùng này mà không phải vẽ lại. Vùng loại trừ không đổi được.")
         self.edt_plc = QLineEdit()
-        self.edt_plc.setPlaceholderText("ví dụ M200 - không bắt buộc, chỉ cho vùng include")
+        self.edt_plc.setPlaceholderText("ví dụ M200 - không bắt buộc, bit riêng của vùng này")
         self.edt_plc.textChanged.connect(self._validate_plc)
         self.chk_enabled = QCheckBox("Enabled")
         self.cmb_camera = QComboBox()
@@ -133,6 +154,7 @@ class RoiPanel(QWidget):
         self.btn_apply = QPushButton("Apply to ROI")
         f.addRow("ID", self.lbl_id)
         f.addRow("Name", self.edt_name)
+        f.addRow("Type", self.cmb_type)
         f.addRow("Camera", self.cmb_camera)
         f.addRow("PLC Device", self.edt_plc)
         f.addRow(self.chk_enabled)
@@ -141,6 +163,7 @@ class RoiPanel(QWidget):
         lay.addStretch(1)
 
         self.btn_add.clicked.connect(self.add_include_requested)
+        self.btn_add_warn.clicked.connect(self.add_warning_requested)
         self.btn_add_ex.clicked.connect(self.add_exclude_requested)
         self.btn_finish.clicked.connect(self.finish_requested)
         self.btn_cancel.clicked.connect(self.cancel_requested)
@@ -164,9 +187,11 @@ class RoiPanel(QWidget):
                     (st.value if st else ("-" if r.is_include else "n/a"))]
             for col, v in enumerate(vals):
                 it = QTableWidgetItem(v)
-                if col in (1, 4, 6):
+                if col in (COL_CAM, COL_ON, COL_PTS):
                     it.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-                if col == 7 and st is not None:
+                if col == COL_TYPE:
+                    it.setForeground(QColor(TYPE_COLORS.get(r.type, COLOR_TEXT_MUTED)))
+                if col == COL_STATE and st is not None:
                     it.setForeground(QColor(COLOR_ERROR if st.occupied else COLOR_OK))
                 if not r.enabled:
                     it.setForeground(QColor(COLOR_TEXT_MUTED))
@@ -180,11 +205,11 @@ class RoiPanel(QWidget):
 
     def update_states(self, states: Dict[str, OccupancyState]) -> None:
         for row in range(self.table.rowCount()):
-            rid_item = self.table.item(row, 0)
+            rid_item = self.table.item(row, COL_ID)
             if rid_item is None:
                 continue
             st = states.get(rid_item.text())
-            it = self.table.item(row, 6)
+            it = self.table.item(row, COL_STATE)
             if it is not None and st is not None and it.text() != st.value:
                 it.setText(st.value)
                 it.setForeground(QColor(COLOR_ERROR if st.occupied else COLOR_OK))
@@ -196,7 +221,7 @@ class RoiPanel(QWidget):
         self.table.blockSignals(True)
         self.table.clearSelection()
         for row in range(self.table.rowCount()):
-            if self.table.item(row, 0).text() == roi_id:
+            if self.table.item(row, COL_ID).text() == roi_id:
                 self.table.selectRow(row)
                 break
         self.table.blockSignals(False)
@@ -237,6 +262,7 @@ class RoiPanel(QWidget):
         self.btn_finish.setEnabled(drawing)
         self.btn_cancel.setEnabled(drawing)
         self.btn_add.setEnabled(not drawing)
+        self.btn_add_warn.setEnabled(not drawing)
         self.btn_add_ex.setEnabled(not drawing)
         if mode != "edit" and self.btn_edit.isChecked():
             self.btn_edit.blockSignals(True)
@@ -268,7 +294,7 @@ class RoiPanel(QWidget):
     # ------------------------------------------------------------------ internal
     def _table_selection(self) -> None:
         rows = self.table.selectionModel().selectedRows()
-        rid = self.table.item(rows[0].row(), 0).text() if rows else ""
+        rid = self.table.item(rows[0].row(), COL_ID).text() if rows else ""
         if rid != self._selected:
             self._selected = rid
             self._fill_fields()
@@ -284,7 +310,7 @@ class RoiPanel(QWidget):
         r = self._current()
         enabled = r is not None
         for w in (self.edt_name, self.edt_plc, self.chk_enabled, self.btn_apply, self.btn_delete,
-                  self.cmb_camera):
+                  self.cmb_camera, self.cmb_type):
             w.setEnabled(enabled)
         if r is None:
             self.lbl_id.setText("-")
@@ -297,6 +323,11 @@ class RoiPanel(QWidget):
         self.edt_plc.setText(r.plc_device)
         self.edt_plc.setEnabled(r.is_include)
         self.chk_enabled.setChecked(r.enabled)
+        self.cmb_type.blockSignals(True)
+        idx = self.cmb_type.findData(r.type.value)
+        self.cmb_type.setCurrentIndex(max(0, idx))
+        self.cmb_type.blockSignals(False)
+        self.cmb_type.setEnabled(r.is_include)     # an exclusion stays an exclusion
         cam = int(getattr(r, "camera", 0))
         if 0 <= cam < self.cmb_camera.count():
             self.cmb_camera.blockSignals(True)
@@ -317,6 +348,7 @@ class RoiPanel(QWidget):
             self.lbl_hint.setText(f"Địa chỉ PLC '{plc}' không hợp lệ (ví dụ: M200, D110)")
             self.lbl_hint.setStyleSheet(f"color: {COLOR_ERROR}; font-size: 9pt;")
             return
+        type_value = str(self.cmb_type.currentData() or r.type.value) if r.is_include else r.type.value
         self.fields_changed.emit(r.id, self.edt_name.text().strip() or r.name,
                                  plc if r.is_include else "", self.chk_enabled.isChecked(),
-                                 max(0, self.cmb_camera.currentIndex()))
+                                 max(0, self.cmb_camera.currentIndex()), type_value)

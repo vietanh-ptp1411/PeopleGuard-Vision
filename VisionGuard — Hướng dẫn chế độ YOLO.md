@@ -90,14 +90,17 @@ Xong thì dòng *Model* hiện `yolo11n.pt | cuda:0` và chip **AI MODEL** chuy�
 
 Đây là điểm mạnh lớn nhất của chế độ YOLO: vẽ polygon tự do trực tiếp trên hình, kèm vùng loại trừ.
 
-Có hai loại vùng:
+Có ba loại vùng:
 
-- **Zone (include)** — vùng giám sát. Có người trong đây thì bật bit PLC.
-- **Exclusion** — vùng loại trừ. Người nằm trong đây **không tính**, dù đứng giữa vùng giám sát. Dùng cho lối đi an toàn, bục vận hành, khu vực ngoài hàng rào.
+- **Alarm** — vùng nguy hiểm. Có người trong đây thì bật bit **ALARM** (`M100`), thường dùng để dừng máy.
+- **Warning** — vùng cảnh báo. Có người trong đây thì bật bit **WARNING** (`M101`), thường dùng để giảm tốc hoặc báo đèn/còi.
+- **Exclusion** — vùng loại trừ. Người nằm trong đây **không tính**, dù đứng giữa vùng Alarm hay Warning. Dùng cho lối đi an toàn, bục vận hành, khu vực ngoài hàng rào.
+
+Alarm và Warning bắt người **giống hệt nhau** (cùng cách xét điểm chân / tâm, cùng ON/OFF delay, cùng vùng loại trừ); chỉ khác bit gửi sang PLC. Hai bit độc lập: một người đứng ở cả hai vùng thì cả `M100` và `M101` cùng bật. Có thể vẽ nhiều vùng mỗi loại; bit của loại đó bật khi **bất kỳ** vùng nào cùng loại có người.
 
 ### Cách vẽ
 
-1. Bấm **+ Zone** (dưới khung hình hoặc trong tab *Zones*).
+1. Bấm **+ Alarm** hoặc **+ Warning** trong tab *Zones*.
 2. Click từng điểm trên hình để tạo đỉnh polygon.
 3. **Double-click** hoặc **Enter** để đóng vùng. Click phải để hoàn tác điểm vừa đặt, **Esc** để huỷ.
 4. Lặp lại với **+ Exclusion** nếu cần vùng loại trừ.
@@ -122,10 +125,11 @@ Tab **Zones** → bảng *ROI LIST* → chọn một vùng → nhóm *SELECTED R
 | Ô | Ý nghĩa |
 | --- | --- |
 | Name | Tên dễ đọc, hiện trong log và History |
+| Type | Alarm hay Warning — đổi mức của vùng đã vẽ mà không phải vẽ lại (vùng loại trừ không đổi được) |
 | PLC device | Bit riêng cho vùng này, ví dụ `M200` |
 | Enabled | Tắt tạm một vùng mà không phải xoá |
 
-Ô *PLC device* không bắt buộc. Để trống thì vùng đó vẫn tính vào trạng thái chung (bit `M100`), chỉ là không có bit riêng. Địa chỉ sai sẽ báo đỏ ngay tại chỗ.
+Ô *PLC device* không bắt buộc. Để trống thì vùng đó vẫn tính vào bit chung của loại nó (`M100` cho Alarm, `M101` cho Warning), chỉ là không có bit riêng. Địa chỉ sai sẽ báo đỏ ngay tại chỗ.
 
 **Tọa độ vùng được lưu chuẩn hoá theo tỷ lệ 0–1**, nên đổi độ phân giải camera hay đổi nguồn hình thì vùng vẫn nằm đúng chỗ. File lưu ở `config/roi_config.json`.
 
@@ -142,14 +146,16 @@ Các bit mặc định gửi sang PLC:
 
 | Bit | Ý nghĩa |
 | --- | --- |
-| `M100` | Có người (PERSON) |
-| `M101` | Hết người (CLEAR) |
+| `M100` | Có người trong vùng **Alarm** (PERSON / ALARM) |
+| `M101` | Có người trong vùng **Warning** |
 | `M102` | Camera OK |
 | `M103` | AI đang chạy |
 | `M104` | FAULT |
 | `M110` | Heartbeat, đảo 0/1 mỗi 500 ms |
-| `D100` | Status word |
+| `D100` | Status word: 0 CLEAR, 1 OCCUPIED (Alarm), 6 WARNING, 2/3/4 lỗi, 5 STOPPED |
 | `M200`… | Bit riêng từng vùng, do bạn gán |
+
+Mặc định chỉ `M100`, `M101` và `M110` được ghi; các bit còn lại để trống trong tab PLC. Bit *Hết người (CLEAR)* của Mode B chỉ bật khi **không ai** ở cả vùng Alarm lẫn Warning.
 
 Bên PLC cần khai một **SLMP Connection** trong GX Works: giao thức TCP, port 5000, Communication Data Code **Binary**. Sai data code sẽ báo lỗi `0xC050`.
 

@@ -452,13 +452,14 @@ class PlcConnectionConfig:
 
 @dataclass
 class PlcMappingConfig:
-    """Two devices by default, because two is what a ladder actually needs.
+    """Three devices by default: one bit per zone level, and the heartbeat.
 
     An empty name means "do not write this at all". The diagnostic bits and the status
     word are still here for a site that wants them - fill the field in and they come
-    back - but a fresh install writes the person bit and the heartbeat and nothing else.
+    back - but a fresh install writes the two zone bits and the heartbeat and nothing else.
     """
-    device_person: str = "M100"        # 1 while somebody is inside a monitored zone
+    device_person: str = "M100"        # 1 while somebody is inside an ALARM zone
+    device_warning: str = "M101"       # 1 while somebody is inside a WARNING zone
     device_heartbeat: str = "M110"     # toggles while the system is alive AND can see
     device_clear: str = ""             # AREA_CLEAR, only used in dual-bit mode
     device_camera_ok: str = ""         # Camera connected
@@ -535,8 +536,10 @@ class RetentionConfig:
 @dataclass
 class VisualizationConfig:
     """All drawing colors live here, never in the logic layer."""
-    color_roi_include: str = "#FFD400"
-    color_roi_include_occupied: str = "#FF3B30"
+    color_roi_include: str = "#FFD400"            # alarm zone, empty
+    color_roi_include_occupied: str = "#FF3B30"   # alarm zone, somebody inside
+    color_roi_warning: str = "#5AC8FA"            # warning zone, empty
+    color_roi_warning_occupied: str = "#FF9500"   # warning zone, somebody inside
     color_roi_exclude: str = "#8E8E93"
     color_roi_editing: str = "#00C7FF"
     color_person: str = "#34C759"

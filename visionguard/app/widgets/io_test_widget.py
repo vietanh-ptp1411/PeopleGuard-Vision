@@ -107,7 +107,8 @@ class IoTestWidget(QWidget):
             w.deleteLater()
         self._quick_buttons.clear()
         rows: List[Tuple[str, str, bool]] = [
-            ("Person / Occupied", mapping.device_person, True),
+            ("Alarm zone / Occupied", mapping.device_person, True),
+            ("Warning zone", mapping.device_warning, True),
             ("Area Clear", mapping.device_clear, True),
             ("Camera OK", mapping.device_camera_ok, True),
             ("AI Running", mapping.device_ai_running, True),
