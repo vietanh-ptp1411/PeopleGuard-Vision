@@ -352,14 +352,16 @@ giữ ảnh mới nhất — bỏ qua một ảnh xem trước không bao giờ 
 
 # Giao diện PLC — mỗi ROI một bit
 
-Trong **Zones**, bấm **+ ROI**, vẽ vùng, nhập **PLC bit**, bấm **Apply to ROI** rồi **Save ROI**.
+Trong **Zones**, bấm **+ ROI** và vẽ vùng. Sang **PLC → Devices**, chọn ROI trong **ROI LIST**,
+nhập **PLC bit** tại **SELECTED ROI**, bấm **Apply to ROI** rồi **Save ROI**.
 Ví dụ `ROI_001 → M200`, `ROI_002 → M201`. Mỗi bit ON/OFF theo trạng thái của chính ROI đó,
 sau thời gian debounce. Các vùng chồng nhau có thể cùng bật. ID dùng chung cho toàn bộ camera,
 không trùng nhau và không đổi khi sửa ROI.
 
 Phần mềm kiểm tra bit trùng, địa chỉ không hợp lệ và ROI chưa gán bit. Mỗi ROI dùng địa chỉ bit
 (ví dụ M200), không dùng thanh ghi D hoặc ngõ vào X. Các bit ROI luôn được xuất; không cần bật tùy chọn phụ.
-Bit PERSON chung và các bit chẩn đoán trong tab PLC là tùy chọn. Heartbeat mặc định M110.
+Heartbeat và xử lý lỗi nằm tại **PLC → System**. Bit PERSON chung và các bit chẩn đoán là tùy chọn
+nâng cao tại trang System; trang Devices chỉ dùng để chọn ROI và gán bit. Heartbeat mặc định M110.
 
 **Máy dùng bản Alarm/Warning:** ROI Warning cũ chuyển thành ROI, giữ ID/tên/hình dạng và bit riêng
 đã gán; exclusion cũ vẫn được giữ. Cần gán bit cho các ROI chưa có địa chỉ riêng. Bit WARNING chung

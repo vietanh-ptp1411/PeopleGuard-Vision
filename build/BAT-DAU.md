@@ -123,8 +123,8 @@ Bấm **Connect**. Thấy hình là xong bước này.
 
 ### Bước 3 — Vùng giám sát
 
-Tab **Zones**: bấm **+ ROI**, vẽ polygon, chọn ROI rồi nhập **PLC bit** riêng,
-bấm **Apply to ROI** và **Save ROI**. Ví dụ `ROI_001 → M200`, `ROI_002 → M201`.
+Tab **Zones**: bấm **+ ROI** và vẽ polygon. Sang **PLC → Devices**, chọn ROI trong
+**ROI LIST**, nhập **PLC bit** tại **SELECTED ROI**, bấm **Apply to ROI** và **Save ROI**. Ví dụ `ROI_001 → M200`, `ROI_002 → M201`.
 Mỗi ROI dùng một bit không trùng ROI khác hoặc heartbeat. Người vào vùng nào thì bit vùng đó bật.
 
 Camera lắp chéo thì vùng vuông ngoài đời sẽ thành **hình thang** trên ảnh — vẽ theo đúng hình
@@ -155,7 +155,7 @@ Kiểm tra `off delay` **để 500–1000 ms**. Đặt ngắn hơn sẽ làm tí
 
 ### Bước 5 — PLC
 
-Tab **PLC**: điền IP và port PLC. Gán bit từng ROI tại tab **Zones**; heartbeat mặc định `M110`.
+Tab **PLC**: điền IP và port PLC. Gán bit từng ROI tại **PLC → Devices**; heartbeat mặc định `M110`, cấu hình tại **PLC → System**.
 
 > Trước khi thử: trong GX Works phải **tick "Enable write at RUN time"** ở tham số
 > Ethernet/MC. Không tick thì PLC nhận kết nối bình thường nhưng **từ chối mọi lệnh ghi**,

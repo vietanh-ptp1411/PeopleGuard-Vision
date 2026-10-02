@@ -204,7 +204,7 @@ def check_roi_outputs(r: Report, settings) -> None:
         validate_rois(rois, settings.plc, settings.camera.camera_count)
         enabled = [roi for roi in rois if roi.enabled]
         if not enabled and not settings.plc.mapping.device_person:
-            r.add(WARN, "ROI PLC bits", "No active ROI outputs; draw an ROI and assign its PLC bit in Zones")
+            r.add(WARN, "ROI PLC bits", "No active ROI outputs; draw an ROI in Zones and assign its bit in PLC > Devices")
             return
     except ValueError as exc:
         r.add(FAIL, "ROI PLC bits", str(exc))

@@ -22,7 +22,7 @@ from typing import Dict
 
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QTimer, QUrl
+from PySide6.QtCore import Qt, QSignalBlocker, QTimer, QUrl
 from PySide6.QtGui import QAction, QCloseEvent, QDesktopServices, QKeySequence
 from PySide6.QtWidgets import (QApplication, QFrame, QHBoxLayout, QLabel, QMainWindow, QMessageBox, QPushButton,
                                QSizePolicy, QTabWidget, QVBoxLayout, QWidget)
@@ -102,7 +102,6 @@ class MainWindow(QMainWindow):
 
         self.video.set_rois(self.ctrl.roi_manager.all())
         self.roi_panel.set_rois(self.ctrl.roi_manager.all())
-        self.roi_panel.set_plc_config(s.plc)
         self.plc_cfg.set_rois(self.ctrl.roi_manager.all())
         self._apply_area("STOPPED")
         self.status_panel.set_heartbeat(None, s.plc.heartbeat.enabled)
@@ -455,11 +454,18 @@ class MainWindow(QMainWindow):
         rp.delete_requested.connect(self._delete_roi)
         rp.clear_requested.connect(self._clear_rois)
         rp.save_requested.connect(self._save_rois)
-        rp.selection_changed.connect(v.select_roi)
-        rp.fields_changed.connect(c.update_roi_fields)
+        rp.devices_requested.connect(self._open_roi_devices)
+        rm = pc.roi_mapping
+        rm.selection_changed.connect(self._select_roi_device)
+        rm.fields_changed.connect(c.update_roi_fields)
+        rm.save_requested.connect(self._save_rois)
+        rm.delete_requested.connect(self._delete_roi)
+        rm.edit_requested.connect(self._edit_roi_from_devices)
+        rm.zones_requested.connect(lambda: self.tabs.setCurrentIndex(TAB_ROI))
         v.roi_drawn.connect(c.add_roi)
         v.roi_points_changed.connect(c.update_roi_points)
         v.roi_selected.connect(rp.select)
+        v.roi_selected.connect(rm.select)
         v.roi_delete_requested.connect(self._delete_roi)
         v.mode_changed.connect(self._on_editor_mode)
         # "Need at least 3 points to close a polygon" and friends: onto the Zones page,
@@ -510,6 +516,25 @@ class MainWindow(QMainWindow):
         if self.video.count > 1 and self.video.maximized < 0:
             self.video.set_maximized(self.video.active)
         self.video.start_drawing(rtype)
+
+    def _open_roi_devices(self) -> None:
+        self.plc_cfg.show_devices()
+        self.tabs.setCurrentIndex(TAB_PLC)
+
+    def _select_roi_device(self, roi_id: str) -> None:
+        roi = self.ctrl.roi_manager.get(roi_id)
+        if roi is not None and self.video.count > 1:
+            self.video.set_maximized(roi.camera)
+        # This selection originated in Devices. Highlighting the video must not
+        # send selection events back into the table while Qt is handling a click.
+        with QSignalBlocker(self.video):
+            self.video.select_roi(roi_id)
+        self.roi_panel.select(roi_id)
+
+    def _edit_roi_from_devices(self, roi_id: str) -> None:
+        self._select_roi_device(roi_id)
+        self.tabs.setCurrentIndex(TAB_ROI)
+        self.video.set_edit_mode(True)
 
     def _open_alert_tab(self) -> None:
         self.tabs.setCurrentIndex(getattr(self, "_alert_tab", TAB_STATUS))
@@ -598,14 +623,19 @@ class MainWindow(QMainWindow):
         self.status_panel.set_ai_perf(result.ai_fps, result.inference_ms)
         if result.roi_states != self._roi_states:
             self._roi_states = dict(result.roi_states)
-            self.roi_panel.update_states(self._roi_states)
+            self.plc_cfg.roi_mapping.update_states(self._roi_states)
 
     def _on_rois_changed(self) -> None:
         rois = self.ctrl.roi_manager.all()
-        self.video.set_rois(rois)
-        self.roi_panel.set_rois(rois, self._roi_states)
-        self.plc_cfg.set_rois(rois)
+        # A tile on a different camera may clear its local selection when its ROI
+        # list is refreshed. Keep that from clearing the selected Devices form.
+        with QSignalBlocker(self.video):
+            self.video.set_rois(rois)
+        self.roi_panel.set_rois(rois)
+        self.plc_cfg.set_rois(rois, self._roi_states)
+        self._select_roi_device(self.plc_cfg.roi_mapping.selected_roi_id)
         self.roi_panel.set_dirty(self.ctrl.roi_manager.dirty)
+        self.plc_cfg.roi_mapping.set_dirty(self.ctrl.roi_manager.dirty)
         self._refresh_status()
 
     def _on_editor_mode(self, mode: str) -> None:
@@ -629,6 +659,7 @@ class MainWindow(QMainWindow):
         self.tabs.setTabVisible(TAB_EVENT, ai)
         self.tabs.setTabVisible(TAB_AI, not ai)
         self.tabs.setTabVisible(TAB_ROI, not ai)
+        self.plc_cfg.set_roi_mode(not ai)
         self.chip_detect.set_caption("AI EVENTS" if ai else "AI MODEL")
         self.chip_zones.set_caption("REGIONS" if ai else "ZONES")
         provider = self.ctrl.settings.camera.ai_camera.provider_enum
@@ -641,14 +672,16 @@ class MainWindow(QMainWindow):
         """One tile per camera, named the way the Camera tab names them."""
         count = cfg.camera_count
         self.video.set_count(count, [cfg.label(i) for i in range(count)])
-        self.video.set_rois(self.ctrl.roi_manager.all())
+        with QSignalBlocker(self.video):
+            self.video.set_rois(self.ctrl.roi_manager.all())
+        self._select_roi_device(self.plc_cfg.roi_mapping.selected_roi_id)
         self._on_active_camera(self.video.active)
 
     def _on_active_camera(self, index: int) -> None:
         """Which camera a new zone would be drawn on."""
         cfg_now = self.ctrl.settings.camera
         labels = [cfg_now.label(i) for i in range(cfg_now.camera_count)]
-        self.roi_panel.set_cameras(labels)
+        self.plc_cfg.roi_mapping.set_cameras(labels)
         self.roi_panel.set_target_camera(index, labels)
         if self.video.count <= 1:
             self.lbl_source.setText(self.ctrl.settings.camera.describe_source())
@@ -766,7 +799,7 @@ class MainWindow(QMainWindow):
         count = self.ctrl.settings.camera.camera_count
         bare = count - len({int(getattr(r, "camera", 0)) for r in includes})   # cameras with no zone
         if not includes:
-            return ("warn", "Chưa có ROI đang bật xuất PLC", "Vẽ ROI và gán PLC bit trong tab Zones")
+            return ("warn", "Chưa có ROI đang bật xuất PLC", "Vẽ vùng tại Zones, gán bit tại PLC → Devices")
         detail = f"{len(includes)} ROI · {sum(bool(r.plc_device) for r in includes)} bit PLC"
         if excludes:
             detail += f" + {len(excludes)} vùng loại trừ cũ"
@@ -819,6 +852,7 @@ class MainWindow(QMainWindow):
     def _save_rois(self) -> None:
         self.ctrl.save_rois()
         self.roi_panel.set_dirty(self.ctrl.roi_manager.dirty)
+        self.plc_cfg.roi_mapping.set_dirty(self.ctrl.roi_manager.dirty)
         self._refresh_status()
 
     def _open_folder(self, path: str) -> None:
@@ -840,7 +874,7 @@ class MainWindow(QMainWindow):
         if not self.ctrl.apply_plc_config(cfg):
             self.plc_cfg.set_config(self.ctrl.settings.plc)
             return
-        self.roi_panel.set_plc_config(cfg)
+        self.plc_cfg.roi_mapping.set_plc_config(cfg)
         self.io_test.set_mapping(cfg.mapping)
         self.btn_sim.blockSignals(True)
         self.btn_sim.setChecked(cfg.simulation_mode)

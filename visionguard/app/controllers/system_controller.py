@@ -689,7 +689,7 @@ class SystemController(QObject):
     def add_roi(self, type_value: str, points: List, camera: int = 0) -> None:
         rtype = RoiType.parse(type_value)
         roi = self.roi_manager.create(rtype, points, camera=camera)
-        self.message.emit(f"Đã tạo {roi.id} — chọn ROI, nhập PLC bit rồi Apply và Save ROI")
+        self.message.emit(f"Đã tạo {roi.id} — vào PLC → Devices, nhập bit rồi Apply và Save ROI")
 
     def update_roi_points(self, roi_id: str, points: List) -> None:
         self.roi_manager.update_points(roi_id, points)

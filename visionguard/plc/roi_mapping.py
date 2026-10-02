@@ -40,7 +40,7 @@ def validate_roi_devices(devices: Dict[str, str], cfg: PlcConfig, *, require_ass
     for rid, text in devices.items():
         if not text.strip():
             if require_assigned:
-                raise DeviceAddressError(f"{rid}: chưa gán bit PLC; chọn ROI và nhập bit, ví dụ M200")
+                raise DeviceAddressError(f"{rid}: chưa gán bit PLC; vào PLC → Devices, chọn ROI và nhập bit, ví dụ M200")
             continue
         canonical = normalize_roi_device(text, cfg)
         address = parse_device(canonical, xy_octal=octal)

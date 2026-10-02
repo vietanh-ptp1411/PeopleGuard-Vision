@@ -219,7 +219,7 @@ Làm lần lượt theo 4 chip trạng thái trên command bar:
    Muốn chạy thử không cần camera thật: chọn **Video File** và trỏ tới một file có người đi lại.
 2. **AI Model** – tab *AI Model* → **Load Model** (mặc định tự nạp khi mở app).
 3. **Zones** – nút **+ Zone** dưới khung hình (hoặc tab *Zones*) → click từng điểm trên hình →
-   double-click / Enter để đóng polygon. Chọn ROI, nhập **PLC bit** riêng, bấm **Apply** rồi **Save ROI**.
+   double-click / Enter để đóng polygon. Sang **PLC → Devices**, chọn ROI, nhập **PLC bit** riêng, bấm **Apply** rồi **Save ROI**.
 4. **PLC** – tab *PLC*: giữ **PLC SIM** bật để demo, hoặc tắt nó, nhập IP PLC thật rồi
    **Connect** / **Test Connection**.
 5. **Run** – **START** (F5) trên command bar. Dừng bằng **STOP** (F6).
@@ -348,7 +348,7 @@ Tất cả adapter trả về **numpy BGR** thống nhất (`to_bgr()` xử lý 
 * Chỉ có một loại ROI giám sát (vàng, đỏ khi có người). Bấm **+ ROI** để tạo.
 * Mỗi ROI có ID riêng và một **PLC bit** riêng (ví dụ `ROI_001 → M200`, `ROI_002 → M201`). Không gán trùng bit với ROI khác hoặc heartbeat/bit hệ thống.
 * Vùng Warning cũ chuyển thành ROI, giữ ID/tên/hình dạng/bit đã gán. Exclusion cũ vẫn giữ tác dụng loại trừ để không thay đổi vùng giám sát của khách.
-* Mỗi ROI: `id, name, type, enabled, points, color, plc_device` (tab ROI → *Selected ROI* → Apply).
+* Mỗi ROI: `id, name, type, enabled, points, color, plc_device` (PLC → Devices → *Selected ROI* → Apply).
 * Toạ độ **normalized (x/w, y/h)** lưu trong `config/roi_config.json` → đổi resolution/resize cửa sổ vẫn đúng.
 
 ```json
@@ -399,7 +399,9 @@ API (`BasePLC`): `connect() disconnect() is_connected() read_bit() write_bit() r
 
 ### 7.2 Mỗi ROI một bit PLC
 
-Trong **Zones**: **+ ROI** → vẽ vùng → chọn vùng → nhập **PLC bit** → **Apply to ROI** → **Save ROI**.
+Trong **Zones**: **+ ROI** → vẽ vùng. Sang **PLC → Devices**: chọn ROI trong **ROI LIST** → nhập **PLC bit** trong **SELECTED ROI** → **Apply to ROI** → **Save ROI**.
+
+Chọn ROI sẽ làm nổi vùng trên camera tương ứng. Nút **Sửa hình ROI** đưa về phần vẽ vùng. Heartbeat và chính sách khi lỗi nằm tại **PLC → System**; bit tổng PERSON/CLEAR là tùy chọn nâng cao ở đó.
 ID do phần mềm tạo, không đổi khi sửa tên/hình dạng hoặc chuyển camera. ID đã xóa không cấp lại.
 
 | Đầu ra | Ý nghĩa |
@@ -407,7 +409,7 @@ ID do phần mềm tạo, không đổi khi sửa tên/hình dạng hoặc chuy�
 | `ROI_001 → M200` (ví dụ) | ON khi có người trong ROI_001 sau debounce; OFF khi vùng trống |
 | `ROI_002 → M201` (ví dụ) | Hoạt động độc lập; hai vùng có người thì hai bit cùng ON |
 | `M110` | Heartbeat, mặc định 500 ms; dừng khi STOP hoặc hệ thống không giám sát được |
-| PERSON / CLEAR | Bit tổng tùy chọn trong tab PLC; để trống thì không ghi |
+| PERSON / CLEAR | Bit tổng tùy chọn tại PLC → System → Advanced settings; để trống thì không ghi |
 | Camera OK / AI Running / Fault | Bit chẩn đoán tùy chọn |
 | Status word | Tùy chọn: 0 CLEAR, 1 OCCUPIED, 2 CAMERA ERROR, 3 PLC ERROR, 4 AI ERROR, 5 STOPPED |
 
@@ -418,7 +420,7 @@ Khi STOP, giữ giá trị bit cuối. Khi lỗi, áp dụng chính sách HOLD/O
 Khi đổi bit hoặc xóa ROI, bit cũ được trả về OFF khi giám sát đang chạy và không lỗi.
 
 **Nâng cấp bản Alarm/Warning:** giữ nguyên file cấu hình của khách. Các ROI giữ ID và bit riêng
-đã gán; ROI chưa có bit cần cấu hình tại Zones. Bit WARNING chung cũ không còn được ghi;
+đã gán; ROI chưa có bit cần cấu hình tại PLC → Devices. Bit WARNING chung cũ không còn được ghi;
 bit PERSON chung cũ nếu có được giữ như đầu ra tổng. Kiểm tra lại ánh xạ trong PLC trước khi chạy.
 Bản này cần EXE mới; chỉ thay `Install.bat` không cập nhật chức năng ROI.
 

@@ -20,6 +20,7 @@ from ...plc.device_address import is_valid_device
 from ..theme import COLOR_ERROR, COLOR_OK, COLOR_TEXT_DIM, COLOR_WARN
 from .form_helpers import AdvancedSection, advanced_checkbox, hint, page_header
 from .io_test_widget import IoTestWidget
+from .roi_device_widget import RoiDeviceWidget
 
 PLC_SERIES = ["iQ-F (FX5U)", "iQ-R", "Q Series", "L Series", "Other MC 3E"]
 
@@ -57,6 +58,7 @@ class PlcConfigWidget(QWidget):
         self._memory = {}
         self.advanced = AdvancedSection()
         self.io_test = IoTestWidget(config.mapping)
+        self.roi_mapping = RoiDeviceWidget(config)
         self._build()
         self.set_config(config)
 
@@ -81,7 +83,9 @@ class PlcConfigWidget(QWidget):
 
         self.tabs = QTabWidget()
         self.tabs.addTab(self._build_connection(), "Connection")
-        self.tabs.addTab(self._build_devices(), "Devices")
+        self.devices_page = self._build_devices()
+        self.tabs.addTab(self.devices_page, "Devices")
+        self.tabs.addTab(self._build_system(), "System")
         self.tabs.addTab(self.io_test, "Manual I/O")
         self.tabs.addTab(self._build_memory(), "Memory")
         lay.addWidget(self.tabs, 1)
@@ -94,6 +98,17 @@ class PlcConfigWidget(QWidget):
             combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
             combo.setMinimumContentsLength(12)
         self.advanced.set_visible(False)
+        self.tabs.currentChanged.connect(self._page_changed)
+
+    def _page_changed(self, _index: int) -> None:
+        # Devices has its own Apply/Save ROI actions, writing roi_config.json.
+        # The header action saves the PLC connection/system settings only.
+        devices = self.tabs.currentWidget() is self.devices_page
+        self.btn_apply.setVisible(not devices)
+        self.chk_advanced.setVisible(not devices)
+
+    def show_devices(self) -> None:
+        self.tabs.setCurrentWidget(self.devices_page)
 
     # ------------------------------------------------------------------ connection page
     def _build_connection(self) -> QWidget:
@@ -178,15 +193,27 @@ class PlcConfigWidget(QWidget):
     # ------------------------------------------------------------------ devices page
     def _build_devices(self) -> QWidget:
         page, lay = _page()
+        lay.addWidget(self.roi_mapping)
+        self.lbl_camera_regions = hint("Chế độ AI Camera: chọn vùng và gán bit tại AI Events → Regions.")
+        self.lbl_camera_regions.hide()
+        lay.addWidget(self.lbl_camera_regions)
+        lay.addStretch(1)
+        return page
 
-        g_map = QGroupBox("PLC DEVICES")
+    def set_roi_mode(self, enabled: bool) -> None:
+        self.roi_mapping.setVisible(enabled)
+        self.lbl_camera_regions.setVisible(not enabled)
+
+    def _build_system(self) -> QWidget:
+        page, lay = _page()
+
+        g_map = QGroupBox("SYSTEM OUTPUTS")
         fm = QFormLayout(g_map)
         self.edt_person = QLineEdit()
         self.edt_clear = QLineEdit()
         fm.addRow("Có người chung (tùy chọn)", self.edt_person)
         fm.addRow("Hết người (CLEAR)", self.edt_clear)
-        fm.addRow(hint("Gán bit riêng tại tab Zones: chọn ROI → nhập PLC bit → Apply → Save ROI. "
-                       "Các bit ROI luôn được ghi độc lập. Bit có người chung có thể để trống."))
+        fm.addRow(hint("Heartbeat và các đầu ra hệ thống. Gán bit cho từng ROI tại Devices."))
 
         self.cmb_signal = QComboBox()
         self.cmb_signal.addItem("Mode A - bit riêng từng ROI", SignalMode.SINGLE_BIT.value)
@@ -204,7 +231,7 @@ class PlcConfigWidget(QWidget):
         fm.addRow("Heartbeat", self.edt_hb)
         fm.addRow("", self.chk_word)
         fm.addRow("Status word", self.edt_word)
-        self.advanced.rows(fm, self.cmb_signal, self.edt_camera, self.edt_ai, self.edt_fault, self.edt_hb,
+        self.advanced.rows(fm, self.edt_person, self.edt_clear, self.cmb_signal, self.edt_camera, self.edt_ai, self.edt_fault,
                            self.chk_word, self.edt_word)
         self.lbl_word_hint = hint("Status word: 0 CLEAR, 1 OCCUPIED, 2 CAMERA ERROR, 3 PLC ERROR, "
                                   "4 AI ERROR, 5 STOPPED.")
@@ -231,7 +258,6 @@ class PlcConfigWidget(QWidget):
         fh.addRow("Bit ROI khi FAULT", self.cmb_fault_person)
         fh.addRow("", self.chk_clear_off)
         fh.addRow(hint("Khi mất camera hoặc mất kênh sự kiện, phần mềm không bao giờ tự báo HẾT NGƯỜI."))
-        self.advanced.widget(g_hb)
         lay.addWidget(g_hb)
 
         for e in (self.edt_person, self.edt_clear, self.edt_camera, self.edt_ai, self.edt_fault,
@@ -312,7 +338,8 @@ class PlcConfigWidget(QWidget):
             self.tbl_mem.setItem(row, 1, it_val)
             self.tbl_mem.setItem(row, 2, QTableWidgetItem(meanings.get(dev, "")))
 
-    def set_rois(self, rois) -> None:
+    def set_rois(self, rois, states=None) -> None:
+        self.roi_mapping.set_rois(rois, states)
         self._roi_devices = {r.plc_device: f"{r.id} · {r.name}" for r in rois if r.is_include and r.plc_device}
         self.io_test.set_roi_devices(self._roi_devices)
         self.set_memory(self._memory)
@@ -333,6 +360,7 @@ class PlcConfigWidget(QWidget):
     # ================================================================== config <-> widgets
     def set_config(self, cfg: PlcConfig) -> None:
         self._config = deepcopy(cfg)
+        self.roi_mapping.set_plc_config(cfg)
         c = cfg.connection
         self.cmb_series.setCurrentText(c.plc_series if c.plc_series in PLC_SERIES else PLC_SERIES[-1])
         self.edt_ip.setText(c.ip)
