@@ -421,16 +421,7 @@ class VideoView(QWidget):
             return QColor(self.vis.color_roi_exclude)
         st = self._roi_states.get(roi.id)
         occupied = st is not None and st.occupied
-        if roi.is_warning:
-            return QColor(self.vis.color_roi_warning_occupied if occupied else self.vis.color_roi_warning)
         return QColor(self.vis.color_roi_include_occupied if occupied else self.vis.color_roi_include)
-
-    def _hits_alarm(self, roi_ids) -> bool:
-        """Is at least one of these zones an alarm zone (as opposed to warning only)?"""
-        wanted = set(roi_ids)
-        if FULL_FRAME_ID in wanted:
-            return True
-        return any(r.id in wanted and r.is_alarm for r in self._rois)
 
     # ================================================================== painting
     def paintEvent(self, _ev) -> None:  # noqa: N802
@@ -499,9 +490,8 @@ class VideoView(QWidget):
         has_include = any(r.is_include and r.enabled and r.is_valid() for r in self._rois)
         if self._display_mode == "result" and self._image is not None and not has_include:
             self._paint_full_frame(p)
-        # exclusions first, then warning, then alarm, so the outline that matters most is on top
-        ordered = ([r for r in self._rois if r.is_exclude] + [r for r in self._rois if r.is_warning]
-                   + [r for r in self._rois if r.is_alarm])
+        # Legacy exclusions remain masks; all watched ROIs share the same styling.
+        ordered = [r for r in self._rois if r.is_exclude] + [r for r in self._rois if r.is_include]
         for roi in ordered:
             if len(roi.points) < 2:
                 continue
@@ -530,21 +520,12 @@ class VideoView(QWidget):
                 p.drawPolygon(poly)
             else:
                 p.drawPolyline(poly)
-            # Label in the zone's top-left corner, not its middle. A tag in the middle
-            # sits exactly where people walk, so it covers the thing the camera is watching.
-            #
-            # It carries the NAME only. The occupancy state used to be on it as well
-            # ("CLEAR" / "OCCUPIED"), which the red PERSON DETECTED banner and the zone's
-            # own fill colour already say twice over - three ways of saying the same thing,
-            # and the one in the middle of the picture was the only one in the way.
-            #
-            # One identifier, not two: the default name is the id with the underscore taken
-            # out, so printing both put "ROI_001  ROI 001" on the picture. The id is still
-            # in the Zones panel and in every event row.
-            title = roi.name.strip() or roi.id
+            title = roi.id
+            if roi.name.strip() and roi.name.replace(" ", "_") != roi.id:
+                title += f" · {roi.name.strip()}"
             lines = [title + (f"  [{roi.plc_device}]" if roi.plc_device else "")]
-            if not roi.is_alarm:
-                lines.append(roi.type.label.upper())   # type, not state - colour alone is subtle
+            if roi.is_exclude:
+                lines.append("EXCLUSION")
             if not roi.enabled:
                 lines.append("DISABLED")               # a dotted outline is easy to miss
             corner = poly.boundingRect().topLeft()
@@ -584,10 +565,7 @@ class VideoView(QWidget):
         lw = max(1, int(self.vis.line_width))
         for i, ev in enumerate(dets):
             det = ev.detection
-            warning_only = ev.status == DetectionZoneStatus.IN_ROI and not self._hits_alarm(ev.roi_ids)
-            if warning_only:
-                color = QColor(self.vis.color_roi_warning_occupied)
-            elif ev.status == DetectionZoneStatus.IN_ROI:
+            if ev.status == DetectionZoneStatus.IN_ROI:
                 color = QColor(self.vis.color_person_in_roi)
             elif ev.status == DetectionZoneStatus.IGNORED_EXCLUSION:
                 color = QColor(self.vis.color_person_ignored)
@@ -608,9 +586,7 @@ class VideoView(QWidget):
                 continue
             ident = f"#{det.track_id}" if (self.vis.show_ids and det.track_id is not None) else f"{i + 1}"
             conf = f"  {det.confidence:.2f}" if self.vis.show_confidence else ""
-            if warning_only:
-                lines = ["PERSON IN WARNING ZONE", ", ".join(ev.roi_ids) + conf]
-            elif ev.status == DetectionZoneStatus.IN_ROI:
+            if ev.status == DetectionZoneStatus.IN_ROI:
                 lines = ["PERSON IN AREA", ", ".join(ev.roi_ids) + conf]
             elif ev.status == DetectionZoneStatus.IGNORED_EXCLUSION:
                 lines = ["IGNORED - EXCLUSION ZONE", f"Person {ident}{conf}"]

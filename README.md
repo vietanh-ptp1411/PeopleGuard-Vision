@@ -219,7 +219,7 @@ Làm lần lượt theo 4 chip trạng thái trên command bar:
    Muốn chạy thử không cần camera thật: chọn **Video File** và trỏ tới một file có người đi lại.
 2. **AI Model** – tab *AI Model* → **Load Model** (mặc định tự nạp khi mở app).
 3. **Zones** – nút **+ Zone** dưới khung hình (hoặc tab *Zones*) → click từng điểm trên hình →
-   double-click / Enter để đóng polygon. **+ Exclusion** cho vùng loại trừ. Nhấn **Save** để lưu.
+   double-click / Enter để đóng polygon. Chọn ROI, nhập **PLC bit** riêng, bấm **Apply** rồi **Save ROI**.
 4. **PLC** – tab *PLC*: giữ **PLC SIM** bật để demo, hoặc tắt nó, nhập IP PLC thật rồi
    **Connect** / **Test Connection**.
 5. **Run** – **START** (F5) trên command bar. Dừng bằng **STOP** (F6).
@@ -289,7 +289,7 @@ Tab **AI Events → Regions**. Region id mới xuất hiện tự động khi ca
     { "camera_region_id": "2", "name": "Loading Zone", "plc_device": "M201", "enabled": true } ] }
 ```
 
-`M100` / `M101` / `D100` vẫn là trạng thái tổng của cả khu vực, `M200`/`M201` là bit riêng từng vùng.
+`M200`/`M201` là ví dụ bit riêng từng vùng. Bit tổng PERSON, CLEAR và status word là tùy chọn trong tab PLC.
 
 ### Event Monitor và RAW EVENT
 
@@ -345,8 +345,9 @@ Tất cả adapter trả về **numpy BGR** thống nhất (`to_bgr()` xử lý 
   Esc cancel.
 * **Edit ROI**: click chọn, kéo đỉnh, `Shift+click` lên cạnh để thêm đỉnh, right-click đỉnh để xoá, kéo bên trong để
   dời cả vùng, `Delete` xoá ROI.
-* **INCLUDE** (vàng, đỏ khi occupied) và **EXCLUDE** (xám, gạch chéo). Người trong exclusion zone → `IGNORED – EXCLUSION ZONE`,
-  không kích PLC. Thứ tự: *Exclusion → Include → Outside*.
+* Chỉ có một loại ROI giám sát (vàng, đỏ khi có người). Bấm **+ ROI** để tạo.
+* Mỗi ROI có ID riêng và một **PLC bit** riêng (ví dụ `ROI_001 → M200`, `ROI_002 → M201`). Không gán trùng bit với ROI khác hoặc heartbeat/bit hệ thống.
+* Vùng Warning cũ chuyển thành ROI, giữ ID/tên/hình dạng/bit đã gán. Exclusion cũ vẫn giữ tác dụng loại trừ để không thay đổi vùng giám sát của khách.
 * Mỗi ROI: `id, name, type, enabled, points, color, plc_device` (tab ROI → *Selected ROI* → Apply).
 * Toạ độ **normalized (x/w, y/h)** lưu trong `config/roi_config.json` → đổi resolution/resize cửa sổ vẫn đúng.
 
@@ -355,8 +356,8 @@ Tất cả adapter trả về **numpy BGR** thống nhất (`to_bgr()` xử lý 
   "rois": [
     {"id": "ROI_001", "name": "Robot Zone", "type": "include", "enabled": true,
      "points": [[0.20, 0.30], [0.80, 0.30], [0.85, 0.85], [0.15, 0.85]], "plc_device": "M200"},
-    {"id": "EX_001", "name": "Operator Walkway", "type": "exclude", "enabled": true,
-     "points": [[0.10, 0.10], [0.30, 0.10], [0.30, 0.90], [0.10, 0.90]]}
+    {"id": "ROI_002", "name": "Loading Zone", "type": "include", "enabled": true,
+     "points": [[0.10, 0.10], [0.30, 0.10], [0.30, 0.90], [0.10, 0.90]], "plc_device": "M201"}
   ]
 }
 ```
@@ -396,25 +397,30 @@ API (`BasePLC`): `connect() disconnect() is_connected() read_bit() write_bit() r
 | Timeout / Retry | 2 s / 2 | mất PLC được báo sau ≈ timeout × (retry+1) |
 | Auto reconnect | on | 1 s, 2 s, 5 s… rồi ghi lại toàn bộ trạng thái (resync) |
 
-### 7.2 Device mapping mặc định
+### 7.2 Mỗi ROI một bit PLC
 
-| Device | Ý nghĩa |
+Trong **Zones**: **+ ROI** → vẽ vùng → chọn vùng → nhập **PLC bit** → **Apply to ROI** → **Save ROI**.
+ID do phần mềm tạo, không đổi khi sửa tên/hình dạng hoặc chuyển camera. ID đã xóa không cấp lại.
+
+| Đầu ra | Ý nghĩa |
 |---|---|
-| `M100` | ALARM: có người trong vùng **Alarm** (PERSON_PRESENT / AREA_OCCUPIED) |
-| `M101` | WARNING: có người trong vùng **Warning** – độc lập với M100 |
-| `device_clear` (trống) | AREA_CLEAR (Mode B) – ON khi không ai ở cả hai loại vùng, **không bao giờ** ON cùng M100/M101 |
-| `M102` | Camera connected |
-| `M103` | AI running (system RUNNING và AI có kết quả) |
-| `M104` | System FAULT |
-| `M110` | Heartbeat – PC toggle 0/1 mỗi 500 ms (chỉnh được, bật/tắt) |
-| `D100` | Status word: `0` CLEAR, `1` OCCUPIED (Alarm), `6` WARNING, `2` CAMERA ERROR, `3` PLC ERROR, `4` AI ERROR, `5` NOT RUNNING |
-| ROI `plc_device` | mỗi vùng Alarm / Warning có thể ghi bit riêng (vd `M200`, `M201`) |
+| `ROI_001 → M200` (ví dụ) | ON khi có người trong ROI_001 sau debounce; OFF khi vùng trống |
+| `ROI_002 → M201` (ví dụ) | Hoạt động độc lập; hai vùng có người thì hai bit cùng ON |
+| `M110` | Heartbeat, mặc định 500 ms; dừng khi STOP hoặc hệ thống không giám sát được |
+| PERSON / CLEAR | Bit tổng tùy chọn trong tab PLC; để trống thì không ghi |
+| Camera OK / AI Running / Fault | Bit chẩn đoán tùy chọn |
+| Status word | Tùy chọn: 0 CLEAR, 1 OCCUPIED, 2 CAMERA ERROR, 3 PLC ERROR, 4 AI ERROR, 5 STOPPED |
 
-Vùng vẽ ở tab Zones có hai mức: **Alarm** (`type: include` trong `roi_config.json`, giữ tương thích với file cũ) và **Warning**
-(`type: warning`). Cơ chế bắt người, debounce và exclusion giống nhau; chỉ khác bit đích.
-Signal mode **A** (ALARM + WARNING) hoặc **B** (thêm CLEAR). Fail-safe: khi FAULT bit ALARM/WARNING giữ giá trị cuối (mặc định)
-hoặc ép ON/OFF; bit CLEAR luôn OFF khi FAULT; `D100` = mã lỗi. Khi STOP SYSTEM: `M103 = 0`, `M101 = 0`, `D100 = 5`,
-PERSON giữ nguyên. PLC nên coi **heartbeat đứng > 2 s hoặc M103 = 0 hoặc M104 = 1** là "PC không giám sát" → về trạng thái an toàn.
+Các bit ROI luôn được bật xuất, không cần chọn thêm “Bit riêng từng vùng”. ROI đang bật mà
+thiếu bit sẽ báo lỗi cấu hình. Không dùng thanh ghi word (`D100`) hoặc ngõ vào (`X0`) làm bit ROI.
+Địa chỉ Y được kiểm tra theo hệ bát phân của FX5U hoặc hệ hex của Q Series.
+Khi STOP, giữ giá trị bit cuối. Khi lỗi, áp dụng chính sách HOLD/ON/OFF đã cấu hình.
+Khi đổi bit hoặc xóa ROI, bit cũ được trả về OFF khi giám sát đang chạy và không lỗi.
+
+**Nâng cấp bản Alarm/Warning:** giữ nguyên file cấu hình của khách. Các ROI giữ ID và bit riêng
+đã gán; ROI chưa có bit cần cấu hình tại Zones. Bit WARNING chung cũ không còn được ghi;
+bit PERSON chung cũ nếu có được giữ như đầu ra tổng. Kiểm tra lại ánh xạ trong PLC trước khi chạy.
+Bản này cần EXE mới; chỉ thay `Install.bat` không cập nhật chức năng ROI.
 
 Ví dụ ladder (FX5U):
 ```
@@ -455,21 +461,21 @@ iQ-R (GX Works3): *Module Parameter → Ethernet Port → Own Node Settings / Ex
 ## 8. Simulation Mode (bắt buộc cho demo)
 
 Nút **Simulate PLC** (toolbar hoặc tab PLC): không mở socket, mọi write vào bộ nhớ ảo, bảng **PLC MEMORY** hiển thị
-`M100 = ON/OFF`, `M101`, `M110` heartbeat, `D100`… realtime. Toàn bộ software (camera/video → AI → ROI → debounce → PLC)
+`M200 = ON/OFF`, `M201`, `M110` heartbeat và ID ROI tương ứng theo thời gian thực. Toàn bộ software (camera/video → AI → ROI → debounce → PLC)
 chạy được chỉ với webcam hoặc file video.
 
 ## 9. Fail-safe & trạng thái hệ thống
 
 | Tình huống | Area | System | PLC |
 |---|---|---|---|
-| Bình thường, không người | CLEAR | RUNNING | M100=0 M101=1 D100=0 |
-| Có người trong include ROI (sau ON delay) | OCCUPIED | RUNNING | M100=1 M101=0 D100=1 (+ROI device) |
-| Người chỉ ở exclusion zone / ngoài ROI | CLEAR | RUNNING | M100=0 |
-| Camera mất / video hết | **FAULT** | FAULT | M104=1 M102=0 M101=0 D100=2, M100 giữ |
-| Mất kênh AI event (AI Camera mode) | **FAULT** | FAULT | M104=1 M103=0 D100=4, M100 giữ |
-| AI lỗi / không có kết quả > 3 s | **FAULT** | FAULT | M104=1 M103=0 D100=4 |
+| Bình thường, không người | CLEAR | RUNNING | Mỗi bit ROI = 0 |
+| Có người trong ROI (sau ON delay) | OCCUPIED | RUNNING | Bit của ROI đó = 1 |
+| Người chỉ ở exclusion cũ / ngoài ROI | CLEAR | RUNNING | Mỗi bit ROI = 0 |
+| Camera mất / video hết | **FAULT** | FAULT | Bit ROI theo chính sách lỗi, heartbeat dừng |
+| Mất kênh AI event (AI Camera mode) | **FAULT** | FAULT | Bit vùng theo chính sách lỗi, heartbeat dừng |
+| AI lỗi / không có kết quả > 3 s | **FAULT** | FAULT | Bit ROI theo chính sách lỗi, heartbeat dừng |
 | PLC mất kết nối | (giữ) | FAULT (PLC disconnected) | tự nối lại rồi ghi lại toàn bộ |
-| STOP SYSTEM | STOPPED | STOPPED | M103=0 M101=0 D100=5 |
+| STOP SYSTEM | STOPPED | STOPPED | Giữ bit ROI, heartbeat dừng |
 | Vừa START (≤ 10 s) | STARTING | STARTING | giữ trạng thái trước |
 
 ## 10. Event / Snapshot / Log

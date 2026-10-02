@@ -50,6 +50,15 @@ Kiểm tra nhanh bằng PowerShell:
 `Install.bat` tạo lối tắt Desktop và Start Menu, đăng ký chạy tự động khi đăng nhập Windows,
 rồi chạy kiểm tra hệ thống.
 
+Tác vụ tự chạy không thêm thời gian chờ sau đăng nhập và dùng `--skip-preflight` để
+mở cửa sổ trước khi camera/PLC sẵn sàng. Ứng dụng tự kết nối lại thiết bị; model YOLO
+vẫn cần thời gian nạp trước khi nhận diện được.
+
+Máy đã cài bản cũ: chỉ cần chép file **`Install.bat` mới** vào thư mục chứa
+`VisionGuardLauncher.exe`, rồi chạy lại để cập nhật tác vụ và lối tắt Startup.
+Không cần chép đè cấu hình hoặc giải nén lại cả gói. Có thể kiểm tra thủ công bằng
+`VisionGuardLauncher.exe --check-only`.
+
 **Lần chạy đầu sẽ báo `[FAIL]` ở phần camera — đúng như vậy.** Phần mềm được giao ở trạng
 thái chưa cấu hình: chưa có IP camera, chưa có vùng giám sát, PLC để chế độ mô phỏng. Chỉ
 cần các dòng Python, thư viện và model đã `[ OK ]` là cài đặt thành công.
@@ -114,7 +123,9 @@ Bấm **Connect**. Thấy hình là xong bước này.
 
 ### Bước 3 — Vùng giám sát
 
-Tab **Zones**: vẽ polygon quanh vùng cần bảo vệ, bấm **Save**.
+Tab **Zones**: bấm **+ ROI**, vẽ polygon, chọn ROI rồi nhập **PLC bit** riêng,
+bấm **Apply to ROI** và **Save ROI**. Ví dụ `ROI_001 → M200`, `ROI_002 → M201`.
+Mỗi ROI dùng một bit không trùng ROI khác hoặc heartbeat. Người vào vùng nào thì bit vùng đó bật.
 
 Camera lắp chéo thì vùng vuông ngoài đời sẽ thành **hình thang** trên ảnh — vẽ theo đúng hình
 thang đó, đừng vẽ chữ nhật.
@@ -144,14 +155,13 @@ Kiểm tra `off delay` **để 500–1000 ms**. Đặt ngắn hơn sẽ làm tí
 
 ### Bước 5 — PLC
 
-Tab **PLC**: điền IP và port PLC, chọn địa chỉ device (mặc định `M100` báo có người, `M110`
-nhịp tim).
+Tab **PLC**: điền IP và port PLC. Gán bit từng ROI tại tab **Zones**; heartbeat mặc định `M110`.
 
 > Trước khi thử: trong GX Works phải **tick "Enable write at RUN time"** ở tham số
 > Ethernet/MC. Không tick thì PLC nhận kết nối bình thường nhưng **từ chối mọi lệnh ghi**,
 > trả về mã `0x0055`, và phần mềm không ghi được gì cả.
 
-Sang tab con **Manual I/O**, bấm **Write ON (1)** cho `M100`, rồi mở GX Works xem `M100` có
+Sang tab con **Manual I/O**, bấm **Write ON (1)** cho bit đã gán (ví dụ `M200`), rồi mở GX Works xem bit đó có
 lên 1 không.
 
 - Lên → đường mạng, giao thức, địa chỉ đều đúng

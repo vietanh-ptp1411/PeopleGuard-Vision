@@ -165,8 +165,9 @@ class PlcWorker(QThread):
             return
         # A heartbeat that keeps ticking while the camera is dead tells the PLC the
         # zone is being watched when it is not. Remember the health and gate on it.
-        self._healthy = bool(state.running and not state.fault)
+        self._healthy = False
         written = self._manager.apply_state(state)
+        self._healthy = bool(state.running and not state.fault)
         for dev, val in written:
             self.device_written.emit(dev, val)
         if written:

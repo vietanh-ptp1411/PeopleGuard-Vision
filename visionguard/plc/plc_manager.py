@@ -3,8 +3,7 @@
 Runs inside the PLC worker thread. It never touches the UI.
 
 Word status codes (device_status_word):
-    0 CLEAR, 1 OCCUPIED (alarm zone), 2 CAMERA ERROR, 3 PLC ERROR, 4 AI ERROR, 5 NOT RUNNING,
-    6 WARNING (warning zone only)
+    0 CLEAR, 1 OCCUPIED, 2 CAMERA ERROR, 3 PLC ERROR, 4 AI ERROR, 5 NOT RUNNING
 """
 from __future__ import annotations
 
@@ -18,6 +17,7 @@ from ..utils.performance import MovingAverage
 from .base_plc import BasePLC, PlcError
 from .mitsubishi.mc_driver import MitsubishiMCDriver, series_uses_octal_xy
 from .simulated_plc import SimulatedPLC
+from .roi_mapping import normalize_roi_device, validate_roi_devices
 
 log = logging.getLogger("PLC")
 
@@ -35,8 +35,6 @@ class PlcOutputState:
     """Everything the PLC needs to know, produced by the pipeline/controller."""
     running: bool = False               # system started (monitoring active)
     area_occupied: bool = False         # debounced: somebody in ANY watched zone (alarm or warning)
-    alarm_occupied: bool = False        # debounced: somebody in an ALARM zone   -> device_person
-    warning_occupied: bool = False      # debounced: somebody in a WARNING zone  -> device_warning
     camera_ok: bool = False
     ai_ok: bool = False
     fault: bool = False
@@ -55,8 +53,7 @@ class PlcOutputMapper:
     def occupancy_bit(state: PlcOutputState, cfg: PlcConfig, occupied: bool) -> Optional[int]:
         """The value of any "somebody is there" bit, with the stop / fault policy applied.
 
-        Shared by the ALARM bit, the WARNING bit and the per-zone bits so that all three
-        kinds of zone fail the same way: a stopped system keeps the last value, a fault
+        Shared by the optional aggregate bit and every per-ROI bit: a stopped system keeps the last value, a fault
         does whatever the fail-safe setting says, and only a running, healthy system is
         allowed to say 0.
         """
@@ -73,18 +70,14 @@ class PlcOutputMapper:
         out: Dict[str, Optional[int]] = {}
         dual = cfg.signal_mode == SignalMode.DUAL_BIT.value
         bit = PlcOutputMapper.occupancy_bit
+        try:
+            validate_roi_devices(state.roi_devices, cfg)
+        except ValueError as exc:
+            raise PlcError(str(exc)) from exc
 
-        # --- ALARM bit (PERSON): somebody in an alarm zone ---------------------------
+        # --- optional aggregate PERSON bit: somebody in any ROI ---------------------------
         if m.device_person:
-            out[m.device_person] = bit(state, cfg, state.alarm_occupied)
-
-        # --- WARNING bit: somebody in a warning zone ---------------------------------
-        # Independent of the alarm bit: one person can be in both kinds of zone at once,
-        # and a ladder that slows on WARNING and stops on ALARM wants to see both.
-        if m.device_warning:
-            value = bit(state, cfg, state.warning_occupied)
-            if m.device_warning not in out or out[m.device_warning] is HOLD:
-                out[m.device_warning] = value
+            out[m.device_person] = bit(state, cfg, state.area_occupied)
 
         # --- AREA CLEAR bit (dual-bit mode): nobody in ANY watched zone ---------------
         if dual and m.device_clear:
@@ -110,22 +103,18 @@ class PlcOutputMapper:
                 word = WORD_NOT_RUNNING
             elif state.fault:
                 word = state.fault_code or WORD_AI_ERROR
-            elif state.alarm_occupied:
+            elif state.area_occupied:
                 word = WORD_OCCUPIED
-            elif state.warning_occupied:
-                word = WORD_WARNING
             else:
                 word = WORD_CLEAR
             out[m.device_status_word] = word
 
         # --- per-ROI bits ------------------------------------------------------------
-        if m.write_roi_devices:
-            for rid, dev in state.roi_devices.items():
-                if not dev:
-                    continue
-                val = bit(state, cfg, state.roi_occupied.get(rid, False))
-                if dev not in out or out[dev] is HOLD:
-                    out[dev] = val
+        for rid, dev in state.roi_devices.items():
+            if dev:
+                out[normalize_roi_device(dev, cfg)] = (
+                    bit(state, cfg, state.roi_occupied.get(rid, False))
+                    if rid in state.roi_occupied or state.fault or not state.running else HOLD)
         return out
 
 
@@ -139,6 +128,8 @@ class PlcManager:
         self._hb_last = float("-inf")   # first heartbeat is due immediately after connect
         self.latency = MovingAverage(20)
         self.last_error = ""
+        self._roi_devices: set[str] = set()
+        self._retired_devices: set[str] = set()
 
     # ------------------------------------------------------------------ driver
     @staticmethod
@@ -157,6 +148,8 @@ class PlcManager:
         self.driver = self.create_driver(cfg)
         self._cache.clear()
         self._hb_value = False
+        self._roi_devices.clear()
+        self._retired_devices.clear()
 
     @property
     def simulated(self) -> bool:
@@ -182,6 +175,16 @@ class PlcManager:
         """Write every device whose desired value differs from the last written one."""
         self._last_state = state
         desired = PlcOutputMapper.map(state, self.cfg)
+        current = {normalize_roi_device(dev, self.cfg) for dev in state.roi_devices.values() if dev}
+        self._retired_devices.update(self._roi_devices - current)
+        self._retired_devices.difference_update(current)
+        self._roi_devices = current
+        # Deleted/remapped ROIs must not leave a latched bit behind. Defer clearing
+        # until monitoring is healthy; STOP and faults keep their existing policy.
+        retired = set(self._retired_devices) if state.running and not state.fault else set()
+        for device in retired:
+            if device not in desired and device != self.cfg.mapping.device_heartbeat:
+                desired[device] = 0
         written: List[Tuple[str, int]] = []
         for device, value in desired.items():
             if value is HOLD:
@@ -190,6 +193,7 @@ class PlcManager:
                 continue
             self._write_device(device, int(value))
             written.append((device, int(value)))
+        self._retired_devices.difference_update(retired)
         return written
 
     def resync(self) -> List[Tuple[str, int]]:

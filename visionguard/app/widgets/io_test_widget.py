@@ -20,6 +20,7 @@ class IoTestWidget(QWidget):
     def __init__(self, mapping: PlcMappingConfig, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._mapping = mapping
+        self._roi_devices = {}
         self._quick_buttons: List[QWidget] = []
         self._build()
         self.set_mapping(mapping)
@@ -100,6 +101,10 @@ class IoTestWidget(QWidget):
         if is_valid_device(dev):
             self.read_requested.emit(dev)
 
+    def set_roi_devices(self, devices) -> None:
+        self._roi_devices = dict(devices)
+        self.set_mapping(self._mapping)
+
     def set_mapping(self, mapping: PlcMappingConfig) -> None:
         self._mapping = mapping
         for w in self._quick_buttons:
@@ -107,8 +112,7 @@ class IoTestWidget(QWidget):
             w.deleteLater()
         self._quick_buttons.clear()
         rows: List[Tuple[str, str, bool]] = [
-            ("Alarm zone / Occupied", mapping.device_person, True),
-            ("Warning zone", mapping.device_warning, True),
+            ("Area Occupied", mapping.device_person, True),
             ("Area Clear", mapping.device_clear, True),
             ("Camera OK", mapping.device_camera_ok, True),
             ("AI Running", mapping.device_ai_running, True),
@@ -116,6 +120,7 @@ class IoTestWidget(QWidget):
             ("Heartbeat", mapping.device_heartbeat, True),
             ("Status Word", mapping.device_status_word, False),
         ]
+        rows.extend((label, dev, True) for dev, label in self._roi_devices.items())
         r = 0
         for label, dev, is_bit in rows:
             if not dev:

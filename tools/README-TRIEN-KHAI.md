@@ -121,21 +121,26 @@ lúc dây đã đấu xong.
 | 6 | Chạy `VisionGuardLauncher.exe --check-only` đến khi hết `[FAIL]` | |
 
 Bước 4 là bước duy nhất chạm vào phần cứng thật. **Để nguyên *Simulation* thì không một
-bit nào được ghi ra PLC** — bài kiểm nhắc điều đó bằng một dòng `[WARN]` ở mỗi lần khởi
-động, kể cả khi mọi mục khác đã đạt.
+bit nào được ghi ra PLC** — bài kiểm nhắc điều đó bằng một dòng `[WARN]` khi chạy
+kiểm tra hệ thống, kể cả khi mọi mục khác đã đạt.
 
 ### Vì sao lối tắt Desktop trỏ vào `VisionGuard.exe` chứ không phải Launcher
 
-Launcher **từ chối khởi động** khi bài kiểm còn `[FAIL]`: nó thử lại trong 3 phút rồi
-dừng và ghi lý do vào `logs\launcher.log`. Đúng với một máy chạy 24/7 không người trông
-— nhưng sẽ thành ngõ cụt nếu lần đầu khách bấm vào nó, vì chưa cấu hình thì không vào
-được, mà không vào được thì không cấu hình được.
+Lối tắt Desktop mở trực tiếp `VisionGuard.exe`. Launcher ở Start Menu chạy kiểm tra
+rồi mở ứng dụng, kể cả khi có `[FAIL]`; chỉ cờ `--require-preflight` mới chặn khi có lỗi.
+Launcher còn giám sát và mở lại ứng dụng nếu thoát bất thường.
 
-Vì vậy lối tắt Desktop đi thẳng vào `VisionGuard.exe`, luôn mở được kể cả khi chưa cấu
-hình gì. Launcher chỉ nằm ở tác vụ tự khởi động và ở Start Menu.
+Tác vụ tự khởi động dùng `--skip-preflight`: mở ứng dụng mà không nạp thư viện AI và
+thăm dò mạng một lượt trong launcher trước đó. Tác vụ không đặt độ trễ sau đăng nhập;
+ứng dụng hiển thị tình trạng thiết bị và tự kết nối lại khi camera/PLC sẵn sàng.
+Model YOLO vẫn cần nạp trước khi nhận diện được.
 
 Tác vụ tự khởi động đã đăng ký ngay lúc cài, nên cấu hình xong chỉ cần đăng xuất rồi đăng
 nhập lại là máy tự chạy — không phải cài lại.
+
+Để cập nhật máy đã cài bằng gói ZIP, chép riêng `Install.bat` mới vào thư mục chứa
+`VisionGuardLauncher.exe` rồi chạy lại. Thao tác này cập nhật cả tác vụ và lối tắt
+Startup, không chép đè cấu hình của khách.
 
 ---
 
@@ -158,7 +163,7 @@ powershell -ExecutionPolicy Bypass -File tools\install.ps1 -Gpu
 ```
 
 Script sẽ: tìm Python ≥ 3.10 → tạo `.venv` riêng → cài thư viện → **kiểm tra hệ thống** →
-đăng ký tác vụ tự chạy khi đăng nhập Windows (trễ 30 giây cho mạng kịp lên).
+đăng ký tác vụ tự chạy khi đăng nhập Windows, không thêm thời gian chờ.
 
 Thêm `-NoAutoStart` nếu chỉ muốn cài mà không tự chạy.
 
@@ -188,12 +193,15 @@ camera**, PLC, dung lượng đĩa.
 tools\start.bat
 ```
 
-Đây cũng là lệnh mà tác vụ tự khởi động gọi. Nó làm ba việc:
+Lệnh này chạy launcher. Tác vụ tự khởi động gọi launcher với `--skip-preflight`.
+Launcher làm ba việc:
 
-1. **Chờ** — lúc máy vừa bật, PC sẵn sàng trước switch, camera và PLC. Preflight được thử
-   lại trong 3 phút thay vì fail ngay lần đầu.
-2. **Chạy** — gọi `main.py --autostart`, phần mềm tự bấm START sau 3 giây. Không cần ai ra
-   bấm nút sau khi mất điện.
+1. **Kiểm tra** — mặc định kiểm tra một lần rồi mở ứng dụng, kể cả khi có lỗi.
+   `--skip-preflight` bỏ bước này; `--wait 120` cho phép thử lại trong tối đa khoảng
+   2 phút. Dùng `--require-preflight` nếu muốn chặn mở ứng dụng khi còn lỗi.
+2. **Chạy** — gọi `main.py --autostart`, phần mềm tự bắt đầu giám sát. Chế độ YOLO chờ
+   model sẵn sàng hoặc hết hạn `app.autostart_timeout_s` (mặc định 25 giây); nếu model
+   lỗi thì ứng dụng vẫn mở để hiển thị lỗi, không có nghĩa nhận diện đã sẵn sàng.
 3. **Chạy lại** — nếu app tắt bất thường thì bật lại, với khoảng chờ tăng dần
    (5s → 10s → 30s → 1p → 2p → 5p) để một lỗi cố định không làm treo CPU. Đóng cửa sổ
    bằng tay (thoát mã 0) thì launcher dừng theo, không bật lại.
@@ -342,29 +350,32 @@ giữ ảnh mới nhất — bỏ qua một ảnh xem trước không bao giờ 
 
 ---
 
-# Giao diện PLC — 3 thiết bị
+# Giao diện PLC — mỗi ROI một bit
 
-| Thiết bị | Ý nghĩa |
-|---|---|
-| **M100** | `1` khi có người trong vùng **Alarm**, `0` khi các vùng Alarm trống |
-| **M101** | `1` khi có người trong vùng **Warning**, `0` khi các vùng Warning trống |
-| **M110** | Đảo trạng thái mỗi 500 ms khi hệ thống **đang chạy VÀ nhìn được** |
+Trong **Zones**, bấm **+ ROI**, vẽ vùng, nhập **PLC bit**, bấm **Apply to ROI** rồi **Save ROI**.
+Ví dụ `ROI_001 → M200`, `ROI_002 → M201`. Mỗi bit ON/OFF theo trạng thái của chính ROI đó,
+sau thời gian debounce. Các vùng chồng nhau có thể cùng bật. ID dùng chung cho toàn bộ camera,
+không trùng nhau và không đổi khi sửa ROI.
 
-M100 và M101 độc lập: một người đứng đè lên cả hai loại vùng thì cả hai cùng `1`. Site chỉ
-cần một mức thì vẽ toàn vùng Alarm, M101 sẽ nằm im ở `0` (hoặc xoá trống ô *Vùng WARNING*
-trong tab PLC để không ghi nó nữa). Không ghi gì khác. Trước đây có thêm bit vùng trống,
-M102 (camera OK), M103 (AI chạy), M104 (lỗi), D100 (từ trạng thái) và M200+ (từng vùng) — đã bỏ.
+Phần mềm kiểm tra bit trùng, địa chỉ không hợp lệ và ROI chưa gán bit. Mỗi ROI dùng địa chỉ bit
+(ví dụ M200), không dùng thanh ghi D hoặc ngõ vào X. Các bit ROI luôn được xuất; không cần bật tùy chọn phụ.
+Bit PERSON chung và các bit chẩn đoán trong tab PLC là tùy chọn. Heartbeat mặc định M110.
+
+**Máy dùng bản Alarm/Warning:** ROI Warning cũ chuyển thành ROI, giữ ID/tên/hình dạng và bit riêng
+đã gán; exclusion cũ vẫn được giữ. Cần gán bit cho các ROI chưa có địa chỉ riêng. Bit WARNING chung
+cũ không còn được ghi; PERSON chung nếu đã cấu hình vẫn là bit tổng. Lưu ROI sau khi kiểm tra ánh xạ.
+Chức năng này cần bản EXE mới, không thể cập nhật chỉ bằng Install.bat.
 
 ## Nhịp tim mang luôn ý nghĩa sức khoẻ
 
-Đây là điểm quan trọng nhất của thiết kế 2 bit. M110 **đứng lại** khi:
+M110 **đứng lại** khi:
 
 - Camera chết hoặc mất kết nối
 - Model AI hỏng
 - Người vận hành bấm STOP
 - Phần mềm treo hoặc tắt
 
-Lý do: nếu chỉ đọc M100 thì **camera chết trông y hệt vùng trống** — cả hai đều là `0`.
+Lý do: nếu chỉ đọc bit ROI thì **camera chết trông y hệt vùng trống** — cả hai đều là `0`.
 Máy chạy tiếp trong khi không ai nhìn cái vùng đó. Đó đúng là kiểu hỏng làm người ta bị
 thương. Đóng băng nhịp tim để watchdog mà PLC vốn đã phải có bắt được luôn trường hợp
 camera mù, không tốn thêm bit nào.
@@ -373,11 +384,11 @@ camera mù, không tốn thêm bit nào.
 
 ```
 Nếu M110 KHÔNG đổi trạng thái trong 2 giây  →  coi như hệ thống mù  →  xử lý như có người
-Nếu M100 = 1                                →  có người trong vùng Alarm    →  dừng máy
-Nếu M101 = 1                                →  có người trong vùng Warning  →  giảm tốc / báo đèn còi
+Nếu M200 = 1                                →  có người trong ROI_001 → xử lý theo logic PLC của vùng này
+Nếu M201 = 1                                →  có người trong ROI_002 → xử lý theo logic PLC của vùng này
 ```
 
-Chỉ đọc M100 mà bỏ qua watchdog M110 là **bỏ mất toàn bộ khả năng phát hiện camera hỏng**.
+Chỉ đọc bit ROI mà bỏ qua watchdog M110 là **bỏ mất toàn bộ khả năng phát hiện camera hỏng**.
 
 ## Lấy lại các bit cũ nếu cần
 

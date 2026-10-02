@@ -1,5 +1,5 @@
 {
-  "simulation_mode": false,
+  "simulation_mode": true,
   "signal_mode": "single_bit",
   "word_output_enabled": false,
   "connection": {
@@ -25,14 +25,12 @@
   },
   "mapping": {
     "device_person": "M100",
-    "device_warning": "M101",
     "device_heartbeat": "M110",
     "device_clear": "",
     "device_camera_ok": "",
     "device_ai_running": "",
     "device_fault": "",
-    "device_status_word": "",
-    "write_roi_devices": false
+    "device_status_word": ""
   },
   "heartbeat": {
     "enabled": true,

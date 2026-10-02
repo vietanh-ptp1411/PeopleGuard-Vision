@@ -102,6 +102,8 @@ class MainWindow(QMainWindow):
 
         self.video.set_rois(self.ctrl.roi_manager.all())
         self.roi_panel.set_rois(self.ctrl.roi_manager.all())
+        self.roi_panel.set_plc_config(s.plc)
+        self.plc_cfg.set_rois(self.ctrl.roi_manager.all())
         self._apply_area("STOPPED")
         self.status_panel.set_heartbeat(None, s.plc.heartbeat.enabled)
         self.event_monitor.set_regions(self.ctrl.region_mapping.all())
@@ -447,8 +449,6 @@ class MainWindow(QMainWindow):
         # ROI panel + video editor
         rp, v = self.roi_panel, self.video
         rp.add_include_requested.connect(lambda: self._begin_drawing(RoiType.INCLUDE))
-        rp.add_warning_requested.connect(lambda: self._begin_drawing(RoiType.WARNING))
-        rp.add_exclude_requested.connect(lambda: self._begin_drawing(RoiType.EXCLUDE))
         rp.finish_requested.connect(v.finish_drawing)
         rp.cancel_requested.connect(v.cancel_drawing)
         rp.edit_mode_toggled.connect(v.set_edit_mode)
@@ -604,6 +604,7 @@ class MainWindow(QMainWindow):
         rois = self.ctrl.roi_manager.all()
         self.video.set_rois(rois)
         self.roi_panel.set_rois(rois, self._roi_states)
+        self.plc_cfg.set_rois(rois)
         self.roi_panel.set_dirty(self.ctrl.roi_manager.dirty)
         self._refresh_status()
 
@@ -757,16 +758,18 @@ class MainWindow(QMainWindow):
         return ("ok", f"Đã gán {len(mapped)}/{len(known)} vùng", "")
 
     def _zone_chip(self) -> tuple:
+        error = self.ctrl.roi_mapping_error()
+        if error:
+            return ("warn", "ROI chưa cấu hình đủ bit PLC", error)
         includes = [r for r in self.ctrl.roi_manager.include_rois() if r.enabled and r.is_valid()]
         excludes = [r for r in self.ctrl.roi_manager.exclude_rois() if r.enabled and r.is_valid()]
         count = self.ctrl.settings.camera.camera_count
         bare = count - len({int(getattr(r, "camera", 0)) for r in includes})   # cameras with no zone
         if not includes:
-            return ("ok", "Toàn khung hình (chưa vẽ vùng)", "")
-        alarms = sum(1 for r in includes if r.is_alarm)
-        warnings = len(includes) - alarms
-        parts = ([f"{alarms} alarm"] if alarms else []) + ([f"{warnings} warning"] if warnings else [])
-        detail = " + ".join(parts) + (f" + {len(excludes)} loại trừ" if excludes else "")
+            return ("warn", "Chưa có ROI đang bật xuất PLC", "Vẽ ROI và gán PLC bit trong tab Zones")
+        detail = f"{len(includes)} ROI · {sum(bool(r.plc_device) for r in includes)} bit PLC"
+        if excludes:
+            detail += f" + {len(excludes)} vùng loại trừ cũ"
         if bare > 0:
             detail += f" · {bare} camera toàn khung"
         dirty = self.ctrl.roi_manager.dirty
@@ -834,7 +837,10 @@ class MainWindow(QMainWindow):
 
     # ================================================================== PLC / simulation
     def _plc_config_applied(self, cfg) -> None:
-        self.ctrl.apply_plc_config(cfg)
+        if not self.ctrl.apply_plc_config(cfg):
+            self.plc_cfg.set_config(self.ctrl.settings.plc)
+            return
+        self.roi_panel.set_plc_config(cfg)
         self.io_test.set_mapping(cfg.mapping)
         self.btn_sim.blockSignals(True)
         self.btn_sim.setChecked(cfg.simulation_mode)

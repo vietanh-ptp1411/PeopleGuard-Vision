@@ -189,6 +189,29 @@ def check_disk(r: Report, settings) -> None:
     r.add(status, "Disk space", detail)
 
 
+def check_roi_outputs(r: Report, settings) -> None:
+    if settings is None or settings.camera.is_ai_camera:
+        return
+    from ..roi.roi_manager import RoiManager
+    from ..plc.roi_mapping import validate_rois
+
+    manager = RoiManager(Path(CONFIG_DIR) / "roi_config.json")
+    if manager.path.exists() and not manager.load():
+        r.add(FAIL, "ROI PLC bits", "Cannot load roi_config.json")
+        return
+    rois = manager.include_rois()
+    try:
+        validate_rois(rois, settings.plc, settings.camera.camera_count)
+        enabled = [roi for roi in rois if roi.enabled]
+        if not enabled and not settings.plc.mapping.device_person:
+            r.add(WARN, "ROI PLC bits", "No active ROI outputs; draw an ROI and assign its PLC bit in Zones")
+            return
+    except ValueError as exc:
+        r.add(FAIL, "ROI PLC bits", str(exc))
+        return
+    r.add(OK, "ROI PLC bits", f"{len(enabled)} independent ROI outputs")
+
+
 def check_writable(r: Report) -> None:
     for folder in ("logs", "events", "config"):
         path = PROJECT / folder
@@ -209,6 +232,7 @@ def run() -> Report:
     check_writable(r)
     settings = check_config(r)
     check_model(r, settings)
+    check_roi_outputs(r, settings)
     check_cameras(r, settings)
     check_plc(r, settings)
     check_disk(r, settings)

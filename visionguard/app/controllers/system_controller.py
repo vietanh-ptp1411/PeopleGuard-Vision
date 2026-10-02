@@ -28,8 +28,9 @@ from ...logic.camera_event_state_machine import CameraEventStateMachine, ZoneSta
 from ...logic.occupancy_state_machine import AreaStatus, OccupancyTracker
 from ...logic.pipeline import PipelineResult, ProcessingPipeline
 from ...plc.plc_manager import WORD_AI_ERROR, WORD_CAMERA_ERROR, PlcOutputState
+from ...plc.roi_mapping import normalize_roi_device, validate_roi_devices, validate_rois
 from ...roi.roi_manager import RoiManager
-from ...roi.roi_model import RoiType, ZoneLevel
+from ...roi.roi_model import RoiType
 from ...storage.event_repository import EventRepository, EventType
 from ...storage import housekeeping
 from ...storage.clip_recorder import ClipRecorder
@@ -330,19 +331,6 @@ class SystemController(QObject):
             return any(sm.area_occupied for sm in self.event_states)
         return any(p.area_occupied for p in self.pipelines)
 
-    def group_level_occupied(self, level: ZoneLevel) -> bool:
-        """Any camera seeing a person in a zone of this level - one bit per level for the group.
-
-        An AI camera's regions carry no level, so everything it reports is an alarm: that is
-        what the person bit has always meant there, and a warning bit that never rises is
-        safer than one that guesses.
-        """
-        if self.ai_camera_mode:
-            return self.group_occupied() if level == ZoneLevel.ALARM else False
-        if level == ZoneLevel.ALARM:
-            return any(p.alarm_occupied for p in self.pipelines)
-        return any(p.warning_occupied for p in self.pipelines)
-
     def _sync_group_area(self) -> None:
         """Log AREA OCCUPIED / AREA CLEAR once for the group, not once per camera."""
         occupied = self.group_occupied()
@@ -365,9 +353,7 @@ class SystemController(QObject):
                     parts.append(f"{self.settings.camera.label(i)}: {', '.join(ids)}")
             return "; ".join(parts) or "camera event"
         total = sum(r.evaluation.in_roi for r in self._results.values())
-        levels = [lvl.label for lvl in (ZoneLevel.ALARM, ZoneLevel.WARNING)
-                  if any(r.evaluation.level_occupied(lvl) for r in self._results.values())]
-        return f"{total} person(s) in ROI" + (f" ({', '.join(levels)})" if levels else "")
+        return f"{total} person(s) in ROI"
 
     # ================================================================== wiring
     def _wire_workers(self) -> None:
@@ -661,11 +647,18 @@ class SystemController(QObject):
         self.inference_worker.stop_detection()
 
     # ================================================================== PLC slots
-    def apply_plc_config(self, cfg: PlcConfig) -> None:
+    def apply_plc_config(self, cfg: PlcConfig) -> bool:
+        try:
+            validate_roi_devices({r.id: r.plc_device for r in self.roi_manager.include_rois()}, cfg)
+        except ValueError as exc:
+            self.message.emit(str(exc))
+            return False
         self.settings.plc = cfg
         self.cm.save("plc")
         self.plc_worker.reconfigure(cfg)
         self.message.emit("PLC configuration saved" + (" (simulation)" if cfg.simulation_mode else ""))
+        self._recompute(force_plc=True)
+        return True
 
     def set_simulation(self, on: bool) -> None:
         if self.settings.plc.simulation_mode == on:
@@ -696,24 +689,29 @@ class SystemController(QObject):
     def add_roi(self, type_value: str, points: List, camera: int = 0) -> None:
         rtype = RoiType.parse(type_value)
         roi = self.roi_manager.create(rtype, points, camera=camera)
-        self.message.emit(f"{rtype.label} zone {roi.id} created ({len(points)} points) - remember to Save ROI")
+        self.message.emit(f"Đã tạo {roi.id} — chọn ROI, nhập PLC bit rồi Apply và Save ROI")
 
     def update_roi_points(self, roi_id: str, points: List) -> None:
         self.roi_manager.update_points(roi_id, points)
 
     def update_roi_fields(self, roi_id: str, name: str, plc_device: str, enabled: bool,
-                          camera: int = 0, type_value: str = "") -> None:
+                          camera: int = 0) -> None:
         roi = self.roi_manager.get(roi_id)
         if roi is None:
             return
-        roi.name, roi.plc_device, roi.enabled = name, plc_device.upper(), enabled
+        try:
+            device = normalize_roi_device(plc_device, self.settings.plc) if plc_device.strip() else ""
+            devices = {r.id: r.plc_device for r in self.roi_manager.include_rois() if r.id != roi_id}
+            if roi.is_include:
+                devices[roi_id] = device
+                if enabled and not device:
+                    raise ValueError(f"{roi_id}: chưa gán bit PLC")
+            validate_roi_devices(devices, self.settings.plc)
+        except ValueError as exc:
+            self.message.emit(str(exc))
+            return
+        roi.name, roi.plc_device, roi.enabled = name, device if roi.is_include else "", enabled
         roi.camera = max(0, int(camera))
-        if type_value:
-            # Alarm <-> Warning only. An exclusion is drawn to be ignored; turning it into a
-            # zone that trips the machine (or the reverse) by a combo box is not a field edit.
-            new_type = RoiType.parse(type_value)
-            if roi.type.is_watched and new_type.is_watched:
-                roi.type = new_type
         self.roi_manager.update(roi)
         self.message.emit(f"ROI {roi_id} updated")
 
@@ -732,6 +730,16 @@ class SystemController(QObject):
     def _on_rois_changed(self) -> None:
         self.rois_changed.emit()
         self._recompute()
+
+    def roi_mapping_error(self) -> str:
+        if self.ai_camera_mode:
+            return ""
+        rois = self.roi_manager.include_rois()
+        try:
+            validate_rois(rois, self.settings.plc, self.settings.camera.camera_count)
+        except ValueError as exc:
+            return str(exc)
+        return ""
 
     # ================================================================== app config
     def apply_app_config(self, cfg: AppConfig) -> None:
@@ -1105,8 +1113,6 @@ class SystemController(QObject):
             video_matters = True
             detector_matters = True
         area_occupied = self.group_occupied()
-        alarm_occupied = self.group_level_occupied(ZoneLevel.ALARM)
-        warning_occupied = self.group_level_occupied(ZoneLevel.WARNING)
         camera_ok = video_ok
 
         fault, code, reason = False, 0, ""
@@ -1142,16 +1148,19 @@ class SystemController(QObject):
             elif not has_data:
                 starting = True
 
+        mapping_error = self.roi_mapping_error()
+        if running and mapping_error:
+            fault, code, reason = True, WORD_AI_ERROR, mapping_error
+            starting = False
+
         if not running:
             area = AreaStatus.STOPPED.value
         elif fault:
             area = AreaStatus.FAULT.value
         elif starting:
             area = "STARTING"
-        elif alarm_occupied:
+        elif area_occupied:
             area = AreaStatus.OCCUPIED.value
-        elif warning_occupied:
-            area = AreaStatus.WARNING.value
         else:
             area = AreaStatus.CLEAR.value
 
@@ -1191,21 +1200,27 @@ class SystemController(QObject):
         if running and area == "STARTING" and not fault:
             return
         if ai_mode:
-            zone_occupied = {}
+            zone_devices = self.region_mapping.devices()
+            zone_occupied = {rid: False for rid in zone_devices}
             for index, machine in enumerate(self.event_states):
                 for rid, occ in machine.zone_occupied().items():
                     zone_occupied[self.region_mapping.key(rid, index)] = occ
-            zone_devices = self.region_mapping.devices()
         else:
             zone_occupied = {}
-            for res in self._results.values():
-                zone_occupied.update(res.roi_occupied)
-            zone_devices = {r.id: r.plc_device for r in self.roi_manager.include_rois() if r.plc_device}
+            rois = self.roi_manager.include_rois()
+            zone_devices = {r.id: r.plc_device for r in rois if r.plc_device}
+            for roi in rois:
+                if not roi.enabled:
+                    zone_occupied[roi.id] = False
+                    continue
+                res = self._results.get(roi.camera)
+                # Hold the last bit until inference has evaluated this exact polygon.
+                # Results already queued before an edit/move cannot clear its output.
+                if res is not None and roi in res.rois and roi.id in res.roi_occupied:
+                    zone_occupied[roi.id] = res.roi_occupied[roi.id]
         out = PlcOutputState(
             running=running,
             area_occupied=bool(area_occupied) if running else False,
-            alarm_occupied=bool(alarm_occupied) if running else False,
-            warning_occupied=bool(warning_occupied) if running else False,
             camera_ok=camera_ok,
             ai_ok=detector_ok,
             fault=fault,

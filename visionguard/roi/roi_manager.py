@@ -33,6 +33,7 @@ class RoiManager:
         self._lock = threading.RLock()
         self._listeners: List[Listener] = []
         self._dirty = False
+        self._issued_ids: set[str] = set()
 
     # ------------------------------------------------------------------ listeners
     def add_listener(self, cb: Listener) -> None:
@@ -99,7 +100,9 @@ class RoiManager:
     def create(self, rtype: RoiType, points: Sequence[NormPoint], name: str = "", plc_device: str = "",
                camera: int = 0) -> Roi:
         with self._lock:
-            rid = new_roi_id(rtype, self.ids())
+            rtype = RoiType.parse(rtype.value)
+            rid = new_roi_id(rtype, list(self._issued_ids))
+            self._issued_ids.add(rid)
             roi = Roi(
                 id=rid,
                 name=name or _default_name(rtype, rid),
@@ -116,8 +119,9 @@ class RoiManager:
 
     def add(self, roi: Roi) -> None:
         with self._lock:
-            if any(r.id == roi.id for r in self._rois):
-                roi.id = new_roi_id(roi.type, self.ids())
+            if not roi.id.strip() or roi.id in self._issued_ids or roi.id == "FULL_FRAME" or roi.id.startswith("__"):
+                roi.id = new_roi_id(roi.type, list(self._issued_ids))
+            self._issued_ids.add(roi.id)
             roi.clamp()
             self._rois.append(deepcopy(roi))
         self._notify()
@@ -183,11 +187,20 @@ class RoiManager:
                 data = json.load(fh)
             items = data.get("rois", []) if isinstance(data, dict) else data
             rois = [Roi.from_dict(d) for d in items if isinstance(d, dict)]
+            issued = set(data.get("issued_ids", [])) if isinstance(data, dict) else set()
+            issued.update(r.id for r in rois)
+            seen = set()
+            for roi in rois:
+                if roi.id in seen or roi.id == "FULL_FRAME" or roi.id.startswith("__"):
+                    roi.id = new_roi_id(roi.type, list(issued))
+                    issued.add(roi.id)
+                seen.add(roi.id)
         except (OSError, json.JSONDecodeError, ValueError) as exc:
             log.error("Cannot load ROI config %s: %s", self.path, exc)
             return False
         with self._lock:
             self._rois = rois
+            self._issued_ids = issued
         self._dirty = False
         log.info("Loaded %d ROI(s) from %s", len(rois), self.path.name)
         self._notify()
@@ -196,7 +209,7 @@ class RoiManager:
 
     def save(self) -> bool:
         with self._lock:
-            payload = {"rois": [r.to_dict() for r in self._rois]}
+            payload = {"rois": [r.to_dict() for r in self._rois], "issued_ids": sorted(self._issued_ids)}
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             tmp = self.path.with_suffix(".tmp")

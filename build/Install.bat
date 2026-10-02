@@ -57,13 +57,13 @@ echo.
 
 echo   [2/3] Dang ky tu khoi dong khi dang nhap Windows...
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^
-  "$a=New-ScheduledTaskAction -Execute '%CD%\VisionGuardLauncher.exe' -WorkingDirectory '%CD%';" ^
-  "$t=New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME; $t.Delay='PT15S';" ^
+  "$a=New-ScheduledTaskAction -Execute '%CD%\VisionGuardLauncher.exe' -Argument '--skip-preflight' -WorkingDirectory '%CD%';" ^
+  "$t=New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME;" ^
   "$s=New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero) -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -MultipleInstances IgnoreNew;" ^
   "$p=New-ScheduledTaskPrincipal -UserId \"$env:USERDOMAIN\$env:USERNAME\" -LogonType Interactive -RunLevel Limited;" ^
   "Unregister-ScheduledTask -TaskName 'VisionGuard' -Confirm:$false -ErrorAction SilentlyContinue;" ^
   "Register-ScheduledTask -TaskName 'VisionGuard' -Action $a -Trigger $t -Settings $s -Principal $p -Description 'VisionGuard person-in-area monitoring' | Out-Null;" ^
-  "'        Da dang ky tac vu VisionGuard (tre 15 giay sau khi dang nhap).'"
+  "'        Da dang ky tac vu VisionGuard (khong them thoi gian cho sau dang nhap).'"
 echo.
 echo         LUU Y: de sau khi mat dien may tu vao Windows roi tu chay phan mem,
 echo         can bat tu dong dang nhap tren may nay (lenh: netplwiz).
@@ -77,7 +77,7 @@ powershell -NoProfile -Command ^
   "$w=New-Object -ComObject WScript.Shell;" ^
   "$u=[Environment]::GetFolderPath('Startup');" ^
   "$s=$w.CreateShortcut($u+'\VisionGuard.lnk');" ^
-  "$s.TargetPath='%CD%\VisionGuardLauncher.exe'; $s.WorkingDirectory='%CD%'; $s.Save();" ^
+  "$s.TargetPath='%CD%\VisionGuardLauncher.exe'; $s.Arguments='--skip-preflight'; $s.WorkingDirectory='%CD%'; $s.Save();" ^
   "if(Test-Path ($u+'\VisionGuard.lnk')){ '        Da them vao Startup cua Windows (lop du phong).' }" ^
   "else { '        [CANH BAO] Khong them duoc vao thu muc Startup.' }"
 echo.

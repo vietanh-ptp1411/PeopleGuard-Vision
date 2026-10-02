@@ -91,10 +91,9 @@ if ($NoAutoStart) {
     Say "  Bo qua theo yeu cau (-NoAutoStart)." "Gray"
 } else {
     $launcher = Join-Path $Root "tools\launcher.py"
-    $action = New-ScheduledTaskAction -Execute $VenvPy -Argument ("`"" + $launcher + "`"") -WorkingDirectory $Root
+    $action = New-ScheduledTaskAction -Execute $VenvPy -Argument ("`"" + $launcher + "`" --skip-preflight") -WorkingDirectory $Root
     # Dang nhap, khong phai khoi dong may: day la ung dung co giao dien, can phien lam viec co man hinh.
     $trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
-    $trigger.Delay = "PT30S"
     $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
         -ExecutionTimeLimit ([TimeSpan]::Zero) -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) `
         -MultipleInstances IgnoreNew
@@ -103,7 +102,7 @@ if ($NoAutoStart) {
         Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue
         Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger `
             -Settings $settings -Principal $principal -Description "VisionGuard person-in-area monitoring" | Out-Null
-        Say ("  Da dang ky tac vu '" + $TaskName + "' - chay khi dang nhap Windows (tre 30 giay).") "Green"
+        Say ("  Da dang ky tac vu '" + $TaskName + "' - chay khi dang nhap Windows (khong them thoi gian cho).") "Green"
         Say ""
         Say "  LUU Y: may khach nen bat tu dong dang nhap (auto-logon) de sau khi mat dien" "Yellow"
         Say "  may tu vao Windows roi phan mem tu chay. Xem netplwiz hoac Sysinternals Autologon." "Yellow"

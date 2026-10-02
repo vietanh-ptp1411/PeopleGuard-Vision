@@ -452,21 +452,17 @@ class PlcConnectionConfig:
 
 @dataclass
 class PlcMappingConfig:
-    """Three devices by default: one bit per zone level, and the heartbeat.
+    """Optional aggregate/diagnostic devices; each ROI always drives its own bit.
 
-    An empty name means "do not write this at all". The diagnostic bits and the status
-    word are still here for a site that wants them - fill the field in and they come
-    back - but a fresh install writes the two zone bits and the heartbeat and nothing else.
+    Empty devices are not written. The heartbeat is independent of occupancy.
     """
-    device_person: str = "M100"        # 1 while somebody is inside an ALARM zone
-    device_warning: str = "M101"       # 1 while somebody is inside a WARNING zone
+    device_person: str = ""            # optional aggregate occupied bit
     device_heartbeat: str = "M110"     # toggles while the system is alive AND can see
     device_clear: str = ""             # AREA_CLEAR, only used in dual-bit mode
     device_camera_ok: str = ""         # Camera connected
     device_ai_running: str = ""        # AI running
     device_fault: str = ""             # System fault
     device_status_word: str = ""       # 0 CLEAR,1 OCCUPIED,2 CAMERA ERR,3 PLC ERR,4 AI ERR,5 STOPPED
-    write_roi_devices: bool = False    # also write each ROI's own plc_device
 
 
 @dataclass

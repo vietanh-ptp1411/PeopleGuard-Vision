@@ -78,6 +78,10 @@ def blank_site_config(folder: Path) -> None:
 
     def plc(data: dict) -> None:
         data["simulation_mode"] = True
+        mapping = data.setdefault("mapping", {})
+        mapping.pop("device_warning", None)
+        mapping.pop("write_roi_devices", None)
+        mapping["device_person"] = ""
         # The PLC address was a guess about the customer's network - the same kind of
         # plausible-looking default that made the camera checks pass on nothing. Blank
         # it: with no address the pre-flight asks for one, instead of sending MC frames
@@ -97,7 +101,7 @@ def blank_site_config(folder: Path) -> None:
             clip["directory"] = "events/clips"
 
     edit("camera_config.json", cameras)
-    edit("roi_config.json", lambda d: d.update({"rois": []}))
+    edit("roi_config.json", lambda d: d.update({"rois": [], "issued_ids": []}))
     edit("plc_config.json", plc)
     edit("app_config.json", app)
     print("  config blanked for the site: 1 camera, no IP, no zones, PLC in simulation, "

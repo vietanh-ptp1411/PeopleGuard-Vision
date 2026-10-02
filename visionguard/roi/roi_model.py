@@ -12,12 +12,7 @@ NormPoint = Tuple[float, float]
 
 
 class ZoneLevel(str, Enum):
-    """How serious it is that somebody is standing in a watched zone.
-
-    Each level drives its own PLC bit, so a ladder can slow the machine on WARNING and
-    stop it on ALARM. Detection, containment and debounce are identical for both - the
-    level only decides which bit the result lands on.
-    """
+    """Legacy pipeline aggregate labels; PLC outputs now use individual ROI IDs."""
     ALARM = "alarm"
     WARNING = "warning"
 
@@ -27,15 +22,14 @@ class ZoneLevel(str, Enum):
 
 
 class RoiType(str, Enum):
-    #: The alarm zone. Stored as "include" because that is what every roi_config.json
-    #: written before there were two levels says, and those zones must stay alarm zones.
+    #: One watched ROI type; keep the existing "include" spelling on disk.
     INCLUDE = "include"
-    WARNING = "warning"
+    WARNING = "warning"   # accepted on input, migrated to INCLUDE by Roi
     EXCLUDE = "exclude"
 
     @property
     def label(self) -> str:
-        return {RoiType.INCLUDE: "Alarm", RoiType.WARNING: "Warning", RoiType.EXCLUDE: "Exclusion"}[self]
+        return "Exclusion" if self is RoiType.EXCLUDE else "ROI"
 
     @property
     def is_watched(self) -> bool:
@@ -53,7 +47,7 @@ class RoiType(str, Enum):
     @classmethod
     def parse(cls, value: str) -> "RoiType":
         v = str(value or "include").strip().lower()
-        if v == "alarm":
+        if v in ("alarm", "warning", "roi"):
             return cls.INCLUDE
         try:
             return cls(v)
@@ -80,13 +74,18 @@ class Roi:
     enabled: bool = True
     points: List[NormPoint] = field(default_factory=list)   # normalized (x/w, y/h)
     color: str = ""                                          # empty -> theme default
-    plc_device: str = ""                                     # e.g. "M200" (alarm / warning zones only)
+    plc_device: str = ""                                     # one output bit, e.g. "M200"
     camera: int = 0                                          # which camera this zone is drawn on
+
+    def __post_init__(self) -> None:
+        # Old Warning polygons keep their identity and geometry, but now drive their
+        # own device just like every other watched ROI. Keep old exclusions as masks.
+        self.type = RoiType.parse(self.type.value if isinstance(self.type, RoiType) else self.type)
 
     # ------------------------------------------------------------------ helpers
     @property
     def is_include(self) -> bool:
-        """Alarm or warning: a zone somebody inside of counts. Exclusions are the opposite."""
+        """A watched ROI. Legacy exclusions remain masks."""
         return self.type.is_watched
 
     @property
@@ -154,11 +153,14 @@ class Roi:
 
 
 def new_roi_id(rtype: RoiType, existing: List[str] | None = None) -> str:
-    """Human friendly IDs: ROI_001 (alarm) / WRN_001 (warning) / EX_001 (falls back to uuid)."""
-    prefix = {RoiType.INCLUDE: "ROI", RoiType.WARNING: "WRN", RoiType.EXCLUDE: "EX"}[rtype]
+    """Readable unique IDs for watched ROIs and legacy exclusion masks."""
+    prefix = "EX" if rtype == RoiType.EXCLUDE else "ROI"
     taken = set(existing or [])
     for i in range(1, 1000):
         cand = f"{prefix}_{i:03d}"
         if cand not in taken:
             return cand
-    return f"{prefix}_{uuid.uuid4().hex[:6]}"
+    while True:
+        candidate = f"{prefix}_{uuid.uuid4().hex[:8]}"
+        if candidate not in taken:
+            return candidate

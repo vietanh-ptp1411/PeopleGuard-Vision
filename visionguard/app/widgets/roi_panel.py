@@ -1,10 +1,4 @@
-"""ROI tab: list of ROIs, per-ROI fields (name / type / PLC device / enabled) and editor actions.
-
-Three kinds of zone can be drawn. ALARM and WARNING are watched the same way - same
-containment test, same debounce - and differ only in which PLC bit they raise, so a ladder
-can slow the machine for a warning and stop it for an alarm. EXCLUSION zones are where a
-person is ignored.
-"""
+"""One watched ROI, one stable ID and one independently configured PLC bit."""
 from __future__ import annotations
 
 from typing import Dict, List
@@ -17,21 +11,17 @@ from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QFormLay
                                QTableWidgetItem, QVBoxLayout, QWidget)
 
 from ...logic.occupancy_state_machine import OccupancyState
-from ...plc.device_address import is_valid_device
-from ...roi.roi_model import Roi, RoiType
+from ...config.schemas import PlcConfig
+from ...plc.roi_mapping import normalize_roi_device, validate_roi_devices
+from ...roi.roi_model import Roi
 from ..theme import COLOR_ERROR, COLOR_OK, COLOR_TEXT_DIM, COLOR_TEXT_MUTED, COLOR_WARN
 from .form_helpers import page_header
 
-#: Text colour of the Type cell, so the two watched levels are told apart at a glance.
-TYPE_COLORS = {RoiType.INCLUDE: COLOR_ERROR, RoiType.WARNING: COLOR_WARN, RoiType.EXCLUDE: COLOR_TEXT_MUTED}
-
-COL_ID, COL_CAM, COL_NAME, COL_TYPE, COL_ON, COL_PLC, COL_PTS, COL_STATE = range(8)
+COL_ID, COL_CAM, COL_NAME, COL_ON, COL_PLC, COL_PTS, COL_STATE = range(7)
 
 
 class RoiPanel(QWidget):
-    add_include_requested = Signal()     # a new ALARM zone
-    add_warning_requested = Signal()     # a new WARNING zone
-    add_exclude_requested = Signal()
+    add_include_requested = Signal()     # a new watched ROI
     finish_requested = Signal()
     cancel_requested = Signal()
     edit_mode_toggled = Signal(bool)
@@ -39,15 +29,16 @@ class RoiPanel(QWidget):
     clear_requested = Signal()
     save_requested = Signal()
     selection_changed = Signal(str)
-    fields_changed = Signal(str, str, str, bool, int, str)   # id, name, plc_device, enabled, camera, type
+    fields_changed = Signal(str, str, str, bool, int)   # id, name, plc_device, enabled, camera
     target_camera_changed = Signal(int)                      # draw the next zone on this camera
 
-    COLS = ("ID", "Cam", "Name", "Type", "On", "PLC", "Pts", "State")
+    COLS = ("ID", "Cam", "Name", "On", "PLC bit", "Pts", "State")
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._rois: List[Roi] = []
         self._selected = ""
+        self._plc_config = PlcConfig()
         self._build()
 
     def _build(self) -> None:
@@ -62,7 +53,7 @@ class RoiPanel(QWidget):
         lay = QVBoxLayout(body)
         lay.setSpacing(8)
 
-        lay.addWidget(page_header("Zones", "Người trong vùng Alarm bật bit ALARM, trong vùng Warning bật bit WARNING"))
+        lay.addWidget(page_header("Zones", "Mỗi ROI có ID và bit PLC riêng: có người = ON, hết người = OFF"))
         # Which camera the next zone goes on. This used to be a sentence telling you to
         # click another camera's tile - on a page where the picture is zoomed to one camera
         # and there is no other tile to click. Getting to camera 2 meant Overview, un-zoom,
@@ -82,13 +73,9 @@ class RoiPanel(QWidget):
 
         g_act = QGroupBox("ROI EDITOR")
         gl = QGridLayout(g_act)
-        self.btn_add = QPushButton("+ Alarm")
+        self.btn_add = QPushButton("+ ROI")
         self.btn_add.setProperty("class", "primary")
-        self.btn_add.setToolTip("Vùng ALARM: có người → bật bit ALARM (dừng máy)")
-        self.btn_add_warn = QPushButton("+ Warning")
-        self.btn_add_warn.setToolTip("Vùng WARNING: có người → bật bit WARNING (cảnh báo / giảm tốc)")
-        self.btn_add_ex = QPushButton("+ Exclusion")
-        self.btn_add_ex.setToolTip("Vùng loại trừ: người đứng trong đây bị bỏ qua")
+        self.btn_add.setToolTip("Vẽ ROI, sau đó chọn vùng và gán bit PLC riêng")
         self.btn_finish = QPushButton("Finish")
         self.btn_cancel = QPushButton("Cancel")
         self.btn_edit = QPushButton("Edit")
@@ -99,14 +86,11 @@ class RoiPanel(QWidget):
         self.btn_clear = QPushButton("Clear all")
         self.btn_save = QPushButton("Save")
         self.btn_save.setProperty("class", "success")
-        # Three tight rows: the three kinds of zone to draw, the drawing controls, the
-        # list actions. A toolbar rather than a menu, and the ROI list stays above the fold.
-        for b in (self.btn_add, self.btn_add_warn, self.btn_add_ex, self.btn_finish, self.btn_cancel,
+        # One creation action, followed by drawing and list controls.
+        for b in (self.btn_add, self.btn_finish, self.btn_cancel,
                   self.btn_edit, self.btn_delete, self.btn_clear, self.btn_save):
             b.setProperty("size", "sm")
-        gl.addWidget(self.btn_add, 0, 0)
-        gl.addWidget(self.btn_add_warn, 0, 1)
-        gl.addWidget(self.btn_add_ex, 0, 2)
+        gl.addWidget(self.btn_add, 0, 0, 1, 3)
         gl.addWidget(self.btn_finish, 1, 0)
         gl.addWidget(self.btn_cancel, 1, 1)
         gl.addWidget(self.btn_edit, 1, 2)
@@ -141,12 +125,8 @@ class RoiPanel(QWidget):
         f = QFormLayout(g_fields)
         self.lbl_id = QLabel("-")
         self.edt_name = QLineEdit()
-        self.cmb_type = QComboBox()
-        self.cmb_type.addItem("Alarm - bit ALARM", RoiType.INCLUDE.value)
-        self.cmb_type.addItem("Warning - bit WARNING", RoiType.WARNING.value)
-        self.cmb_type.setToolTip("Đổi mức của vùng này mà không phải vẽ lại. Vùng loại trừ không đổi được.")
         self.edt_plc = QLineEdit()
-        self.edt_plc.setPlaceholderText("ví dụ M200 - không bắt buộc, bit riêng của vùng này")
+        self.edt_plc.setPlaceholderText("Ví dụ M200 — bit riêng, không trùng ROI khác")
         self.edt_plc.textChanged.connect(self._validate_plc)
         self.chk_enabled = QCheckBox("Enabled")
         self.cmb_camera = QComboBox()
@@ -154,17 +134,14 @@ class RoiPanel(QWidget):
         self.btn_apply = QPushButton("Apply to ROI")
         f.addRow("ID", self.lbl_id)
         f.addRow("Name", self.edt_name)
-        f.addRow("Type", self.cmb_type)
         f.addRow("Camera", self.cmb_camera)
-        f.addRow("PLC Device", self.edt_plc)
+        f.addRow("PLC bit", self.edt_plc)
         f.addRow(self.chk_enabled)
         f.addRow(self.btn_apply)
         lay.addWidget(g_fields)
         lay.addStretch(1)
 
         self.btn_add.clicked.connect(self.add_include_requested)
-        self.btn_add_warn.clicked.connect(self.add_warning_requested)
-        self.btn_add_ex.clicked.connect(self.add_exclude_requested)
         self.btn_finish.clicked.connect(self.finish_requested)
         self.btn_cancel.clicked.connect(self.cancel_requested)
         self.btn_edit.toggled.connect(self.edit_mode_toggled)
@@ -176,21 +153,22 @@ class RoiPanel(QWidget):
 
     # ------------------------------------------------------------------ external updates
     def set_rois(self, rois: List[Roi], states: Dict[str, OccupancyState] | None = None) -> None:
+        new_ids = [r.id for r in rois if r.id not in {old.id for old in self._rois}]
+        if new_ids:
+            self._selected = new_ids[-1]
         self._rois = list(rois)
         states = states or {}
         self.table.blockSignals(True)
         self.table.setRowCount(len(rois))
         for row, r in enumerate(rois):
             st = states.get(r.id)
-            vals = [r.id, str(int(getattr(r, "camera", 0)) + 1), r.name, r.type.label,
-                    "Y" if r.enabled else "N", r.plc_device or "-", str(len(r.points)),
+            vals = [r.id, str(int(getattr(r, "camera", 0)) + 1), r.name,
+                    "Y" if r.enabled else "N", r.plc_device or ("Chưa gán" if r.is_include else "-"), str(len(r.points)),
                     (st.value if st else ("-" if r.is_include else "n/a"))]
             for col, v in enumerate(vals):
                 it = QTableWidgetItem(v)
                 if col in (COL_CAM, COL_ON, COL_PTS):
                     it.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-                if col == COL_TYPE:
-                    it.setForeground(QColor(TYPE_COLORS.get(r.type, COLOR_TEXT_MUTED)))
                 if col == COL_STATE and st is not None:
                     it.setForeground(QColor(COLOR_ERROR if st.occupied else COLOR_OK))
                 if not r.enabled:
@@ -202,6 +180,8 @@ class RoiPanel(QWidget):
         if self._selected and not any(r.id == self._selected for r in rois):
             self._selected = ""
         self._fill_fields()
+        if new_ids:
+            self.selection_changed.emit(self._selected)
 
     def update_states(self, states: Dict[str, OccupancyState]) -> None:
         for row in range(self.table.rowCount()):
@@ -262,8 +242,6 @@ class RoiPanel(QWidget):
         self.btn_finish.setEnabled(drawing)
         self.btn_cancel.setEnabled(drawing)
         self.btn_add.setEnabled(not drawing)
-        self.btn_add_warn.setEnabled(not drawing)
-        self.btn_add_ex.setEnabled(not drawing)
         if mode != "edit" and self.btn_edit.isChecked():
             self.btn_edit.blockSignals(True)
             self.btn_edit.setChecked(False)
@@ -310,7 +288,7 @@ class RoiPanel(QWidget):
         r = self._current()
         enabled = r is not None
         for w in (self.edt_name, self.edt_plc, self.chk_enabled, self.btn_apply, self.btn_delete,
-                  self.cmb_camera, self.cmb_type):
+                  self.cmb_camera):
             w.setEnabled(enabled)
         if r is None:
             self.lbl_id.setText("-")
@@ -323,32 +301,46 @@ class RoiPanel(QWidget):
         self.edt_plc.setText(r.plc_device)
         self.edt_plc.setEnabled(r.is_include)
         self.chk_enabled.setChecked(r.enabled)
-        self.cmb_type.blockSignals(True)
-        idx = self.cmb_type.findData(r.type.value)
-        self.cmb_type.setCurrentIndex(max(0, idx))
-        self.cmb_type.blockSignals(False)
-        self.cmb_type.setEnabled(r.is_include)     # an exclusion stays an exclusion
         cam = int(getattr(r, "camera", 0))
         if 0 <= cam < self.cmb_camera.count():
             self.cmb_camera.blockSignals(True)
             self.cmb_camera.setCurrentIndex(cam)
             self.cmb_camera.blockSignals(False)
 
+    def set_plc_config(self, cfg: PlcConfig) -> None:
+        self._plc_config = cfg
+        self._validate_plc()
+
+    def _validated_device(self) -> str:
+        text = self.edt_plc.text().strip()
+        if not text:
+            return ""
+        device = normalize_roi_device(text, self._plc_config)
+        devices = {r.id: r.plc_device for r in self._rois if r.is_include and r.id != self._selected}
+        devices[self._selected] = device
+        validate_roi_devices(devices, self._plc_config)
+        return device
+
     def _validate_plc(self) -> None:
-        txt = self.edt_plc.text().strip()
-        ok = (not txt) or is_valid_device(txt)
+        try:
+            self._validated_device()
+            ok = True
+        except ValueError:
+            ok = False
         self.edt_plc.setStyleSheet("" if ok else f"border: 1px solid {COLOR_ERROR};")
 
     def _apply_fields(self) -> None:
         r = self._current()
         if r is None:
             return
-        plc = self.edt_plc.text().strip().upper()
-        if plc and not is_valid_device(plc):
-            self.lbl_hint.setText(f"Địa chỉ PLC '{plc}' không hợp lệ (ví dụ: M200, D110)")
+        try:
+            plc = self._validated_device() if r.is_include else ""
+            if r.is_include and self.chk_enabled.isChecked() and not plc:
+                raise ValueError("Hãy nhập bit PLC riêng cho ROI này, ví dụ M200")
+        except ValueError as exc:
+            self.lbl_hint.setText(str(exc))
             self.lbl_hint.setStyleSheet(f"color: {COLOR_ERROR}; font-size: 9pt;")
             return
-        type_value = str(self.cmb_type.currentData() or r.type.value) if r.is_include else r.type.value
         self.fields_changed.emit(r.id, self.edt_name.text().strip() or r.name,
-                                 plc if r.is_include else "", self.chk_enabled.isChecked(),
-                                 max(0, self.cmb_camera.currentIndex()), type_value)
+                                 plc, self.chk_enabled.isChecked(),
+                                 max(0, self.cmb_camera.currentIndex()))

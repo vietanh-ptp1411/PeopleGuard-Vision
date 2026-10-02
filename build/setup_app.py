@@ -134,9 +134,8 @@ def register_task(target: Path) -> bool:
     launcher = target / f"{APP_NAME}Launcher.exe"
     ps = f"""
 $ErrorActionPreference='Stop'
-$a = New-ScheduledTaskAction -Execute '{launcher}' -WorkingDirectory '{target}'
+$a = New-ScheduledTaskAction -Execute '{launcher}' -Argument '--skip-preflight' -WorkingDirectory '{target}'
 $t = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
-$t.Delay = 'PT30S'
 $s = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
      -ExecutionTimeLimit ([TimeSpan]::Zero) -RestartCount 3 `
      -RestartInterval (New-TimeSpan -Minutes 1) -MultipleInstances IgnoreNew
@@ -197,7 +196,7 @@ def main() -> int:
     rule("3/4  Tu khoi dong khi bat may")
     if yes("  Dang ky chay tu dong khi dang nhap Windows?", True):
         if register_task(target):
-            say(f"  Da dang ky tac vu '{APP_NAME}' (tre 30 giay sau khi dang nhap).")
+            say(f"  Da dang ky tac vu '{APP_NAME}' (khong them thoi gian cho sau dang nhap).")
             say()
             say("  LUU Y: de sau khi mat dien may tu vao Windows roi tu chay phan mem,")
             say("  can bat tu dong dang nhap tren may nay (lenh: netplwiz).")
