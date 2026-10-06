@@ -105,16 +105,11 @@ class ContainmentMode(str, Enum):
         }[self]
 
 
-class SignalMode(str, Enum):
-    SINGLE_BIT = "single_bit"   # Mode A: one bit  (person present)
-    DUAL_BIT = "dual_bit"       # Mode B: person bit + clear bit (mutually exclusive)
-
-
 class FaultPersonOutput(str, Enum):
-    """What to do with the PERSON bit while the system is in FAULT."""
+    """What to do with every ROI bit while the system is in FAULT."""
     HOLD = "hold"   # keep last value (never fake a CLEAR)
     ON = "on"       # force occupied (most conservative)
-    OFF = "off"     # force off (only if PLC evaluates the FAULT bit itself)
+    OFF = "off"     # force off (only if the PLC watches the heartbeat itself)
 
 
 class FrameFormat(str, Enum):
@@ -399,6 +394,7 @@ class DetectorConfig:
     device: str = "auto"        # auto | cpu | cuda | cuda:0
     imgsz: int = 640
     max_fps: float = 12.0       # inferences per second PER CAMERA; 0 = as fast as it can
+    cpu_threads: int = 0        # 0 preserves Torch defaults; positive caps CPU inference threads
     classes: List[int] = field(default_factory=lambda: [0])  # COCO person
     max_det: int = 50
     half: bool = False
@@ -452,17 +448,13 @@ class PlcConnectionConfig:
 
 @dataclass
 class PlcMappingConfig:
-    """Optional aggregate/diagnostic devices; each ROI always drives its own bit.
+    """System devices. Occupancy is never sent here: each ROI drives its own bit.
 
-    Empty devices are not written. The heartbeat is independent of occupancy.
+    The heartbeat is independent of occupancy; empty means it is not written. It starts
+    empty on purpose: a default address got toggled on the customer's PLC before anyone
+    had chosen a bit for it.
     """
-    device_person: str = ""            # optional aggregate occupied bit
-    device_heartbeat: str = "M110"     # toggles while the system is alive AND can see
-    device_clear: str = ""             # AREA_CLEAR, only used in dual-bit mode
-    device_camera_ok: str = ""         # Camera connected
-    device_ai_running: str = ""        # AI running
-    device_fault: str = ""             # System fault
-    device_status_word: str = ""       # 0 CLEAR,1 OCCUPIED,2 CAMERA ERR,3 PLC ERR,4 AI ERR,5 STOPPED
+    device_heartbeat: str = ""         # toggles while the system is alive AND can see
 
 
 @dataclass
@@ -482,14 +474,11 @@ class HeartbeatConfig:
 @dataclass
 class FailSafeConfig:
     person_output_on_fault: str = FaultPersonOutput.HOLD.value
-    clear_off_on_fault: bool = True    # never claim AREA_CLEAR during a fault
 
 
 @dataclass
 class PlcConfig:
     simulation_mode: bool = True
-    signal_mode: str = SignalMode.SINGLE_BIT.value
-    word_output_enabled: bool = False
     connection: PlcConnectionConfig = field(default_factory=PlcConnectionConfig)
     mapping: PlcMappingConfig = field(default_factory=PlcMappingConfig)
     heartbeat: HeartbeatConfig = field(default_factory=HeartbeatConfig)
@@ -502,6 +491,8 @@ class SnapshotConfig:
     enabled: bool = True
     directory: str = "events"
     jpeg_quality: int = 90
+    max_pending_mb: int = 32
+    max_pending_jobs: int = 8
 
 
 @dataclass
@@ -516,6 +507,9 @@ class ClipConfig:
     scale: float = 0.5             # 1.0 full size; halving cuts the file and the RAM ring buffer
     retention_days: int = 14       # 0 = keep forever
     max_total_gb: float = 20.0     # hard cap on the whole clips folder; 0 = no cap
+    max_buffer_mb: int = 64       # queue + pre-roll + frame being prepared, per camera
+    max_width: int = 1280
+    capture_fps: float = 15.0     # input sampling cap when fps is auto (0)
 
 
 @dataclass

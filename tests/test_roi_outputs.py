@@ -15,7 +15,7 @@ from visionguard.logic.occupancy_state_machine import OccupancyTracker
 from visionguard.logic.pipeline import ProcessingPipeline
 from visionguard.plc.base_plc import PlcError
 from visionguard.plc.plc_manager import HOLD, PlcManager, PlcOutputMapper, PlcOutputState
-from visionguard.plc.roi_mapping import normalize_roi_device, validate_roi_devices
+from visionguard.plc.roi_mapping import NO_ZONE_MESSAGE, normalize_roi_device, validate_roi_devices, validate_rois
 from visionguard.roi.roi_manager import RoiManager
 from visionguard.roi.roi_model import Roi, RoiType
 from visionguard.roi.roi_processor import RoiProcessor
@@ -30,7 +30,7 @@ def person(x):
 
 
 def state(a=False, b=False, **kwargs):
-    return PlcOutputState(running=True, area_occupied=a or b,
+    return PlcOutputState(running=True,
                           roi_devices={"ROI_001": "M200", "ROI_002": "M201"},
                           roi_occupied={"ROI_001": a, "ROI_002": b}, **kwargs)
 
@@ -88,10 +88,18 @@ class MappingTests(unittest.TestCase):
             with self.subTest(a=a, b=b):
                 self.assertEqual(PlcOutputMapper.map(state(a, b), PlcConfig()), {"M200": int(a), "M201": int(b)})
 
-    def test_optional_aggregate_is_any_roi(self):
-        cfg = PlcConfig()
-        cfg.mapping.device_person = "M100"
-        self.assertEqual(PlcOutputMapper.map(state(b=True), cfg)["M100"], 1)
+    def test_legacy_system_bits_in_old_config_are_never_written(self):
+        cfg = from_dict(PlcConfig, {"signal_mode": "dual_bit", "word_output_enabled": True,
+                                    "mapping": {"device_person": "M100", "device_clear": "M101",
+                                                "device_fault": "M102", "device_status_word": "D100"}})
+        self.assertEqual(PlcOutputMapper.map(state(b=True), cfg), {"M200": 0, "M201": 1})
+
+    def test_no_zone_drawn_is_an_error(self):
+        with self.assertRaisesRegex(ValueError, NO_ZONE_MESSAGE):
+            validate_rois([], PlcConfig(), camera_count=1)
+        with self.assertRaisesRegex(ValueError, "ROI_001"):
+            validate_rois([Roi("ROI_001", "ROI", points=LEFT)], PlcConfig(), camera_count=1)
+        validate_rois([Roi("ROI_001", "ROI", points=LEFT, plc_device="M200")], PlcConfig(), camera_count=1)
 
     def test_stop_holds_and_fault_obeys_each_policy(self):
         cfg = PlcConfig()
@@ -110,6 +118,7 @@ class MappingTests(unittest.TestCase):
 
     def test_reject_word_input_invalid_and_duplicate_bits(self):
         cfg = PlcConfig()
+        cfg.mapping.device_heartbeat = "M110"
         for devices in ({"A": "D200"}, {"A": "X0"}, {"A": "bad"},
                         {"A": "M200", "B": "m 0200"}, {"A": "M110"}):
             with self.subTest(devices=devices), self.assertRaises(ValueError):

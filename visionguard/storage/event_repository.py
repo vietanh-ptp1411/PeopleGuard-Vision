@@ -48,6 +48,8 @@ class EventRepository:
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             self._conn = sqlite3.connect(str(self.path), check_same_thread=False)
+            self._conn.execute("PRAGMA journal_mode=WAL")
+            self._conn.execute("PRAGMA busy_timeout=2000")
             self._conn.execute(
                 """CREATE TABLE IF NOT EXISTS events (
                        id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -61,8 +63,10 @@ class EventRepository:
             )
             self._conn.execute("CREATE INDEX IF NOT EXISTS idx_events_ts ON events(timestamp)")
             self._conn.commit()
-        except sqlite3.Error as exc:
+        except (sqlite3.Error, OSError) as exc:
             log.error("Cannot open event database %s: %s", self.path, exc)
+            if self._conn is not None:
+                self._conn.close()
             self._conn = None
 
     @property
@@ -71,28 +75,34 @@ class EventRepository:
 
     def add(self, event_type: str, roi_id: str = "", roi_name: str = "", details: str = "", snapshot_path: str = "") -> Optional[EventRecord]:
         ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+        records = self.add_batch([EventRecord(0, ts, event_type, roi_id, roi_name, details, snapshot_path)])
+        return records[0] if records else None
+
+    def add_batch(self, records: List[EventRecord]) -> List[EventRecord]:
         if self._conn is None:
-            return None
+            return []
         try:
-            with self._lock:
-                cur = self._conn.execute(
-                    "INSERT INTO events(timestamp, event_type, roi_id, roi_name, details, snapshot_path) VALUES (?,?,?,?,?,?)",
-                    (ts, event_type, roi_id, roi_name, details, snapshot_path),
-                )
-                self._conn.commit()
-                return EventRecord(cur.lastrowid or 0, ts, event_type, roi_id, roi_name, details, snapshot_path)
+            with self._lock, self._conn:
+                for record in records:
+                    cur = self._conn.execute(
+                        "INSERT INTO events(timestamp, event_type, roi_id, roi_name, details, snapshot_path) VALUES (?,?,?,?,?,?)",
+                        (record.timestamp, record.event_type, record.roi_id, record.roi_name,
+                         record.details, record.snapshot_path))
+                    record.id = cur.lastrowid or 0
+            return records
         except sqlite3.Error as exc:
             log.error("Cannot store event: %s", exc)
-            return None
+            return []
 
-    def recent(self, limit: int = 200) -> List[EventRecord]:
+    def recent(self, limit: int = 200, before_id: int = 0) -> List[EventRecord]:
         if self._conn is None:
             return []
         try:
             with self._lock:
                 rows = self._conn.execute(
-                    "SELECT id, timestamp, event_type, roi_id, roi_name, details, snapshot_path FROM events ORDER BY id DESC LIMIT ?",
-                    (int(limit),),
+                    "SELECT id, timestamp, event_type, roi_id, roi_name, details, snapshot_path FROM events "
+                    "WHERE (? = 0 OR id < ?) ORDER BY id DESC LIMIT ?",
+                    (before_id, before_id, int(limit)),
                 ).fetchall()
             return [EventRecord(*r) for r in rows]
         except sqlite3.Error as exc:
@@ -126,33 +136,38 @@ class EventRepository:
                         "(SELECT id FROM events ORDER BY id DESC LIMIT ?)", (int(max_rows),))
                     removed += cur.rowcount or 0
                 self._conn.commit()
-                if removed:
-                    self._conn.execute("VACUUM")     # give the space back to the disk
+                # Reuse freed pages. Full VACUUM during monitoring rewrites the entire DB.
             except Exception as exc:
                 log.error("Cannot prune the event history: %s", exc)
                 return 0
         return removed
 
-    def clear(self) -> None:
+    def clear(self) -> bool:
         if self._conn is None:
-            return
+            return False
         try:
             with self._lock:
                 self._conn.execute("DELETE FROM events")
                 self._conn.commit()
+            return True
         except sqlite3.Error as exc:
             log.error("Cannot clear events: %s", exc)
+            return False
 
     def export_csv(self, path: Path | str, limit: int = 100000) -> bool:
-        records = self.recent(limit)
+        if self._conn is None:
+            return False
         try:
-            with Path(path).open("w", newline="", encoding="utf-8") as fh:
+            with self._lock, Path(path).open("w", newline="", encoding="utf-8-sig") as fh:
                 w = csv.writer(fh)
                 w.writerow(["id", "timestamp", "event_type", "roi_id", "roi_name", "details", "snapshot_path"])
-                for r in reversed(records):
-                    w.writerow([r.id, r.timestamp, r.event_type, r.roi_id, r.roi_name, r.details, r.snapshot_path])
+                cursor = self._conn.execute(
+                    "SELECT id,timestamp,event_type,roi_id,roi_name,details,snapshot_path FROM "
+                    "(SELECT * FROM events ORDER BY id DESC LIMIT ?) ORDER BY id", (int(limit),))
+                while rows := cursor.fetchmany(512):
+                    w.writerows(rows)
             return True
-        except OSError as exc:
+        except (OSError, sqlite3.Error) as exc:
             log.error("CSV export failed: %s", exc)
             return False
 
@@ -163,3 +178,8 @@ class EventRepository:
             except sqlite3.Error:
                 pass
             self._conn = None
+
+    def clear_snapshot_path(self, path: str) -> None:
+        if self._conn is not None:
+            with self._lock, self._conn:
+                self._conn.execute("UPDATE events SET snapshot_path='' WHERE snapshot_path=?", (path,))

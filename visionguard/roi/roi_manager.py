@@ -37,15 +37,19 @@ class RoiManager:
 
     # ------------------------------------------------------------------ listeners
     def add_listener(self, cb: Listener) -> None:
-        self._listeners.append(cb)
+        with self._lock:
+            self._listeners.append(cb)
 
     def remove_listener(self, cb: Listener) -> None:
-        if cb in self._listeners:
-            self._listeners.remove(cb)
+        with self._lock:
+            if cb in self._listeners:
+                self._listeners.remove(cb)
 
     def _notify(self) -> None:
         self._dirty = True
-        for cb in list(self._listeners):
+        with self._lock:
+            listeners = list(self._listeners)
+        for cb in listeners:
             try:
                 cb()
             except Exception as exc:  # listeners must never break the manager

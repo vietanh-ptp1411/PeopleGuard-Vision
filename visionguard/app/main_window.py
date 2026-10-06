@@ -31,6 +31,7 @@ from ..camera.events.camera_event import CameraEvent
 from ..config.config_manager import ConfigManager
 from ..config.schemas import DetectionMode, EventProviderType
 from ..logic.occupancy_state_machine import OccupancyState
+from ..plc.roi_mapping import NO_ZONE_MESSAGE
 from ..roi.roi_model import RoiType
 from ..workers.camera_worker import CameraState
 from .controllers.system_controller import SystemController
@@ -39,6 +40,7 @@ from .widgets.ai_config_widget import AIConfigWidget
 from .widgets.camera_config_widget import CameraConfigWidget
 from .widgets.chrome import AlertStrip, AppBar, ElidedLabel, StateChip, caption
 from .widgets.event_monitor_widget import EventMonitorWidget
+from .widgets.events_widget import EventsWidget
 from .widgets.form_helpers import fit_narrow_panel
 from .widgets.plc_config_widget import PlcConfigWidget
 from .widgets.roi_panel import RoiPanel
@@ -83,6 +85,7 @@ class MainWindow(QMainWindow):
         self._system_state = "STOPPED"
         self._system_message = ""
         self._roi_states: Dict[str, OccupancyState] = {}
+        self._storage_error = self.ctrl.events.last_error
 
         # ---------------------------------------------------------- widgets
         self.video = VideoGrid(s.app.visualization, s.app.ui_fps_limit)
@@ -92,6 +95,10 @@ class MainWindow(QMainWindow):
         self.plc_cfg = PlcConfigWidget(s.plc)
         self.roi_panel = RoiPanel()
         self.storage_cfg = StorageConfigWidget(s.app)
+        self.history = EventsWidget()
+        self.storage_tabs = QTabWidget()
+        self.storage_tabs.addTab(self.storage_cfg, "Cấu hình")
+        self.storage_tabs.addTab(self.history, "Lịch sử")
         self.event_monitor = EventMonitorWidget()
         # the manual I/O screen lives inside the PLC tab: it is PLC testing, not a topic of its own
         self.io_test = self.plc_cfg.io_test
@@ -157,7 +164,7 @@ class MainWindow(QMainWindow):
     def _build_shortcuts(self) -> None:
         act_start = QAction("Start system", self)
         act_start.setShortcut(QKeySequence("F5"))
-        act_start.triggered.connect(self.ctrl.start_system)
+        act_start.triggered.connect(self._start_clicked)
         act_stop = QAction("Stop system", self)
         act_stop.setShortcut(QKeySequence("F6"))
         act_stop.triggered.connect(self.ctrl.stop_system)
@@ -267,7 +274,7 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.ai_cfg, "AI Model")
         self.tabs.addTab(self.roi_panel, "Zones")
         self.tabs.addTab(self.plc_cfg, "PLC")
-        self.tabs.addTab(self.storage_cfg, "Lưu trữ")
+        self.tabs.addTab(self.storage_tabs, "Lưu trữ")
         # Every page has to fit the panel's fixed width; none of them may ask the operator
         # to drag a horizontal scroll bar to find out which setting a value belongs to.
         # Done here rather than in each page so a tab added later is covered too.
@@ -359,7 +366,7 @@ class MainWindow(QMainWindow):
     # ================================================================== wiring
     def _wire(self) -> None:
         c = self.ctrl
-        self.btn_start.clicked.connect(c.start_system)
+        self.btn_start.clicked.connect(self._start_clicked)
         self.btn_stop.clicked.connect(c.stop_system)
         self.btn_sim.toggled.connect(self._sim_toggled_toolbar)
         self.alert.action_clicked.connect(self._open_alert_tab)
@@ -444,6 +451,19 @@ class MainWindow(QMainWindow):
         # storage
         self.storage_cfg.config_applied.connect(c.apply_app_config)
         self.storage_cfg.open_folder_requested.connect(self._open_folder)
+        self.history.refresh_requested.connect(c.events.request_recent)
+        self.history.older_requested.connect(c.events.request_recent)
+        self.history.export_requested.connect(c.events.request_export)
+        self.history.clear_requested.connect(self._clear_history)
+        c.events.history_ready.connect(self.history.set_events)
+        c.events.saved.connect(self.history.add_event)
+        c.events.cleared.connect(c.events.request_recent)
+        c.events.exported.connect(self._on_history_exported)
+        c.events.failed.connect(self._on_storage_error)
+        c.events.recovered.connect(lambda: self._on_storage_error(""))
+        self.storage_tabs.currentChanged.connect(lambda index: c.events.request_recent() if index == 1 else None)
+        self.tabs.currentChanged.connect(lambda index: c.events.request_recent()
+                                         if index == TAB_STORAGE and self.storage_tabs.currentIndex() == 1 else None)
 
         # ROI panel + video editor
         rp, v = self.roi_panel, self.video
@@ -490,6 +510,22 @@ class MainWindow(QMainWindow):
         else:
             self.showFullScreen()
 
+    def _clear_history(self) -> None:
+        if QMessageBox.question(self, "Xóa lịch sử", "Xóa toàn bộ lịch sử sự kiện trong cơ sở dữ liệu?",
+                                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                                QMessageBox.StandardButton.No) == QMessageBox.StandardButton.Yes:
+            self.ctrl.events.request_clear()
+
+    def _on_storage_error(self, message: str) -> None:
+        self._storage_error = message
+        self._refresh_alert()
+
+    def _on_history_exported(self, ok: bool, path: str) -> None:
+        if ok:
+            QMessageBox.information(self, "Xuất lịch sử", f"Đã lưu CSV: {path}")
+        else:
+            QMessageBox.warning(self, "Xuất lịch sử", f"Không xuất được CSV: {path}")
+
     def _update_clock(self) -> None:
         now = datetime.now()
         self.appbar.set_clock(now.strftime("%H:%M:%S"), now.strftime("%d/%m/%Y"))
@@ -520,6 +556,25 @@ class MainWindow(QMainWindow):
     def _open_roi_devices(self) -> None:
         self.plc_cfg.show_devices()
         self.tabs.setCurrentIndex(TAB_PLC)
+
+    def _start_clicked(self) -> None:
+        """START by hand refuses while a zone or a ROI bit is missing: the PLC would hear nothing.
+
+        Only the operator's click is stopped here. Autostart goes through the controller,
+        which reports the same problem as a FAULT instead of a dialog nobody is there to close.
+        """
+        if self.ctrl.running:
+            return
+        error = self.ctrl.roi_mapping_error()
+        if error:
+            QMessageBox.warning(self, "Chưa thể START", f"{error}\n\nMỗi zone cần một bit riêng để gửi "
+                                "có người / không có người xuống PLC.")
+            if error == NO_ZONE_MESSAGE:
+                self.tabs.setCurrentIndex(TAB_ROI)
+            else:
+                self._open_roi_devices()
+            return
+        self.ctrl.start_system()
 
     def _select_roi_device(self, roi_id: str) -> None:
         roi = self.ctrl.roi_manager.get(roi_id)
@@ -828,6 +883,10 @@ class MainWindow(QMainWindow):
         unhealthy = [(chip, tab, name, chip.led.state) for chip, tab, name in candidates
                      if chip.led.state == "error" or (chip.led.state == "warn" and running)]
         if not unhealthy:
+            if self._storage_error:
+                self._alert_tab = TAB_STORAGE
+                self.alert.show_alert("error", self._storage_error, "Mở tab")
+                return
             self.alert.clear()
             return
         errors = [u for u in unhealthy if u[3] == "error"]
@@ -871,7 +930,12 @@ class MainWindow(QMainWindow):
 
     # ================================================================== PLC / simulation
     def _plc_config_applied(self, cfg) -> None:
-        if not self.ctrl.apply_plc_config(cfg):
+        error = self.ctrl.apply_plc_config(cfg)
+        if error:
+            # Refused settings used to vanish without a word: the form snapped back and
+            # the PLC kept the old bits, while the operator believed the new ones were live.
+            QMessageBox.warning(self, "Chưa lưu cấu hình PLC",
+                                f"{error}\n\nCấu hình PLC cũ vẫn đang được dùng.")
             self.plc_cfg.set_config(self.ctrl.settings.plc)
             return
         self.plc_cfg.roi_mapping.set_plc_config(cfg)
@@ -908,6 +972,8 @@ class MainWindow(QMainWindow):
         # Nothing should still be sampling the process while it is being torn down.
         self._meter_timer.stop()
         try:
+            # X saves everything, including edits typed but never confirmed with Apply.
+            self.plc_cfg.roi_mapping.apply_pending()
             self.ctrl.settings.camera = self.camera_cfg.get_config()
             self.ctrl.settings.ai = self.ai_cfg.get_config()
             self.ctrl.settings.plc = self.plc_cfg.get_config()
@@ -916,6 +982,8 @@ class MainWindow(QMainWindow):
             self.ctrl.cm.save_all()
             if self.ctrl.roi_manager.dirty:
                 self.ctrl.roi_manager.save()
+            if self.ctrl.region_mapping.dirty:
+                self.ctrl.region_mapping.save()
         except Exception as exc:
             log.error("Saving configuration on exit failed: %s", exc)
         # Go off screen before shutting the workers down. If the model happens to be

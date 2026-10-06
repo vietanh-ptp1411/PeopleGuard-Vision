@@ -39,6 +39,10 @@ class PipelineResult:
     alarm_occupied: bool = False     # debounced: somebody in an ALARM zone of this camera
     warning_occupied: bool = False   # debounced: somebody in a WARNING zone of this camera
     level_states: Dict[str, OccupancyState] = field(default_factory=dict)   # ZoneLevel value -> state
+    source_token: int = 0
+    produced_at: float = field(default_factory=time.monotonic)
+    inference_started_at: float = 0.0
+    detection_generation: int = 0
 
     @property
     def roi_occupied(self) -> Dict[str, bool]:
@@ -56,6 +60,10 @@ class ProcessingPipeline:
         self._fps = FpsCounter()
         self._infer_avg = MovingAverage(30)
         roi_manager.add_listener(self.refresh_rois)
+
+    def close(self) -> None:
+        """Release the bound callback when this camera leaves the group."""
+        self._roi_manager.remove_listener(self.refresh_rois)
 
     @staticmethod
     def _debounce(logic: LogicConfig) -> DebounceConfig:
@@ -125,6 +133,7 @@ class ProcessingPipeline:
             rois=rois,
             inference_ms=self._infer_avg.value,
             camera=self.camera,
+            source_token=id(self),
             pipeline_ms=(time.perf_counter() - t0) * 1000.0,
             ai_fps=fps,
             alarm_occupied=alarm,

@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Dict, List, Tuple
 
 log = logging.getLogger("SYSTEM")
+_run_lock = threading.Lock()
 
 
 def _older_than(root: Path, days: int, patterns: Tuple[str, ...]) -> int:
@@ -100,7 +101,7 @@ def run_once(app_config, events=None) -> Dict[str, int]:
     report["clips_gb"] = round(left_gb, 2)
     _drop_empty_dirs(clips_root)
 
-    if events is not None and keep.event_days > 0:
+    if events is not None and (keep.event_days > 0 or keep.event_max_rows > 0):
         try:
             report["event_rows"] = events.prune(keep.event_days, keep.event_max_rows)
         except Exception as exc:
@@ -114,7 +115,14 @@ def run_once(app_config, events=None) -> Dict[str, int]:
 
 def run_in_background(app_config, events=None) -> threading.Thread:
     """Deleting thousands of files must never block the UI thread."""
-    thread = threading.Thread(target=run_once, args=(app_config, events),
+    def work():
+        if not _run_lock.acquire(blocking=False):
+            return
+        try:
+            run_once(app_config, events)
+        finally:
+            _run_lock.release()
+    thread = threading.Thread(target=work,
                               name="housekeeping", daemon=True)
     thread.start()
     return thread

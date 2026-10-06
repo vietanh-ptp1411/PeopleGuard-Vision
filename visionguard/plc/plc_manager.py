@@ -1,9 +1,7 @@
 """PlcManager: maps system state -> PLC devices, writes only on change, toggles heartbeat.
 
-Runs inside the PLC worker thread. It never touches the UI.
-
-Word status codes (device_status_word):
-    0 CLEAR, 1 OCCUPIED, 2 CAMERA ERROR, 3 PLC ERROR, 4 AI ERROR, 5 NOT RUNNING
+Runs inside the PLC worker thread. It never touches the UI. Occupancy reaches the PLC only
+through the per-ROI bits; the heartbeat is the one system device.
 """
 from __future__ import annotations
 
@@ -12,33 +10,20 @@ import time
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
-from ..config.schemas import FaultPersonOutput, PlcConfig, SignalMode
+from ..config.schemas import FaultPersonOutput, PlcConfig
 from ..utils.performance import MovingAverage
-from .base_plc import BasePLC, PlcError
+from .base_plc import BasePLC, PlcConfigError, PlcError
 from .mitsubishi.mc_driver import MitsubishiMCDriver, series_uses_octal_xy
 from .simulated_plc import SimulatedPLC
 from .roi_mapping import normalize_roi_device, validate_roi_devices
 
 log = logging.getLogger("PLC")
 
-WORD_CLEAR = 0
-WORD_OCCUPIED = 1
-WORD_CAMERA_ERROR = 2
-WORD_PLC_ERROR = 3
-WORD_AI_ERROR = 4
-WORD_NOT_RUNNING = 5
-WORD_WARNING = 6
-
-
 @dataclass
 class PlcOutputState:
     """Everything the PLC needs to know, produced by the pipeline/controller."""
     running: bool = False               # system started (monitoring active)
-    area_occupied: bool = False         # debounced: somebody in ANY watched zone (alarm or warning)
-    camera_ok: bool = False
-    ai_ok: bool = False
     fault: bool = False
-    fault_code: int = 0                 # WORD_CAMERA_ERROR / WORD_AI_ERROR ...
     roi_occupied: Dict[str, bool] = field(default_factory=dict)   # roi id -> occupied
     roi_devices: Dict[str, str] = field(default_factory=dict)     # roi id -> "M2xx"
 
@@ -51,11 +36,10 @@ class PlcOutputMapper:
 
     @staticmethod
     def occupancy_bit(state: PlcOutputState, cfg: PlcConfig, occupied: bool) -> Optional[int]:
-        """The value of any "somebody is there" bit, with the stop / fault policy applied.
+        """The value of a ROI bit, with the stop / fault policy applied.
 
-        Shared by the optional aggregate bit and every per-ROI bit: a stopped system keeps the last value, a fault
-        does whatever the fail-safe setting says, and only a running, healthy system is
-        allowed to say 0.
+        A stopped system keeps the last value, a fault does whatever the fail-safe setting
+        says, and only a running, healthy system is allowed to say 0.
         """
         if not state.running:
             return HOLD                                       # stopped: keep last value
@@ -66,48 +50,12 @@ class PlcOutputMapper:
 
     @staticmethod
     def map(state: PlcOutputState, cfg: PlcConfig) -> Dict[str, Optional[int]]:
-        m = cfg.mapping
         out: Dict[str, Optional[int]] = {}
-        dual = cfg.signal_mode == SignalMode.DUAL_BIT.value
         bit = PlcOutputMapper.occupancy_bit
         try:
             validate_roi_devices(state.roi_devices, cfg)
         except ValueError as exc:
-            raise PlcError(str(exc)) from exc
-
-        # --- optional aggregate PERSON bit: somebody in any ROI ---------------------------
-        if m.device_person:
-            out[m.device_person] = bit(state, cfg, state.area_occupied)
-
-        # --- AREA CLEAR bit (dual-bit mode): nobody in ANY watched zone ---------------
-        if dual and m.device_clear:
-            if not state.running:
-                clear: Optional[int] = 0
-            elif state.fault:
-                clear = 0 if cfg.failsafe.clear_off_on_fault else HOLD
-            else:
-                clear = 0 if state.area_occupied else 1
-            out[m.device_clear] = clear
-
-        # --- diagnostics bits --------------------------------------------------------
-        if m.device_camera_ok:
-            out[m.device_camera_ok] = 1 if state.camera_ok else 0
-        if m.device_ai_running:
-            out[m.device_ai_running] = 1 if (state.running and state.ai_ok) else 0
-        if m.device_fault:
-            out[m.device_fault] = 1 if state.fault else 0
-
-        # --- status word -------------------------------------------------------------
-        if cfg.word_output_enabled and m.device_status_word:
-            if not state.running:
-                word = WORD_NOT_RUNNING
-            elif state.fault:
-                word = state.fault_code or WORD_AI_ERROR
-            elif state.area_occupied:
-                word = WORD_OCCUPIED
-            else:
-                word = WORD_CLEAR
-            out[m.device_status_word] = word
+            raise PlcConfigError(str(exc)) from exc
 
         # --- per-ROI bits ------------------------------------------------------------
         for rid, dev in state.roi_devices.items():
@@ -125,6 +73,7 @@ class PlcManager:
         self._cache: Dict[str, int] = {}          # last value written per device
         self._last_state: Optional[PlcOutputState] = None
         self._hb_value = False
+        self._hb_written = False        # this heartbeat bit has been driven at least once
         self._hb_last = float("-inf")   # first heartbeat is due immediately after connect
         self.latency = MovingAverage(20)
         self.last_error = ""
@@ -139,17 +88,32 @@ class PlcManager:
         return MitsubishiMCDriver(cfg.connection)
 
     def reconfigure(self, cfg: PlcConfig) -> None:
-        """Swap driver (sim <-> real / new IP). Caller must reconnect afterwards."""
+        """Swap driver (sim <-> real / new IP). Caller must reconnect afterwards.
+
+        On the same PLC, a bit we stop driving must not stay latched where we left it: a
+        heartbeat or ROI bit moved from M110 to M12000 used to leave M110 sitting at 1 -
+        "a bit nobody configured turned on". Those are retired (written 0 once healthy).
+        Pointed at another PLC, the old addresses mean nothing there and are forgotten.
+        """
         try:
             self.driver.disconnect()
         except Exception:
             pass
+        old = self.cfg
+        if _target(old) == _target(cfg):
+            self._retired_devices |= self._roi_devices
+            if self._hb_written and old.mapping.device_heartbeat:
+                self._retired_devices.add(old.mapping.device_heartbeat)
+            if cfg.heartbeat.enabled:
+                self._retired_devices.discard(cfg.mapping.device_heartbeat)
+        else:
+            self._retired_devices.clear()
         self.cfg = cfg
         self.driver = self.create_driver(cfg)
         self._cache.clear()
         self._hb_value = False
+        self._hb_written = False
         self._roi_devices.clear()
-        self._retired_devices.clear()
 
     @property
     def simulated(self) -> bool:
@@ -232,6 +196,7 @@ class PlcManager:
         t0 = time.perf_counter()
         try:
             self.driver.write_bit(self.cfg.mapping.device_heartbeat, self._hb_value)
+            self._hb_written = True
         except PlcError as exc:
             self.last_error = str(exc)
             raise
@@ -264,6 +229,13 @@ class PlcManager:
     @property
     def latency_ms(self) -> float:
         return self.latency.value
+
+
+def _target(cfg: PlcConfig) -> tuple:
+    """What identifies the physical PLC (and its address radix) behind a configuration."""
+    c = cfg.connection
+    return (cfg.simulation_mode, c.ip, c.port, c.network_no, c.pc_no, c.dest_module_io,
+            c.dest_module_station, c.plc_series)
 
 
 def _is_bit(device: str, driver: BasePLC) -> bool:

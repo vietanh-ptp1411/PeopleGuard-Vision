@@ -193,7 +193,7 @@ def check_roi_outputs(r: Report, settings) -> None:
     if settings is None or settings.camera.is_ai_camera:
         return
     from ..roi.roi_manager import RoiManager
-    from ..plc.roi_mapping import validate_rois
+    from ..plc.roi_mapping import NO_ZONE_MESSAGE, validate_rois
 
     manager = RoiManager(Path(CONFIG_DIR) / "roi_config.json")
     if manager.path.exists() and not manager.load():
@@ -203,11 +203,8 @@ def check_roi_outputs(r: Report, settings) -> None:
     try:
         validate_rois(rois, settings.plc, settings.camera.camera_count)
         enabled = [roi for roi in rois if roi.enabled]
-        if not enabled and not settings.plc.mapping.device_person:
-            r.add(WARN, "ROI PLC bits", "No active ROI outputs; draw an ROI in Zones and assign its bit in PLC > Devices")
-            return
     except ValueError as exc:
-        r.add(FAIL, "ROI PLC bits", str(exc))
+        r.add(WARN if str(exc) == NO_ZONE_MESSAGE else FAIL, "ROI PLC bits", str(exc))
         return
     r.add(OK, "ROI PLC bits", f"{len(enabled)} independent ROI outputs")
 

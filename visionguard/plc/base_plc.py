@@ -9,6 +9,13 @@ class PlcError(Exception):
     """Communication or protocol error. The PLC worker turns this into PLC DISCONNECTED/FAULT."""
 
 
+class PlcConfigError(PlcError):
+    """Our own device configuration is unusable (e.g. two outputs on one bit).
+
+    Nothing is wrong with the link, so the worker must not drop and redial it.
+    """
+
+
 class BasePLC(abc.ABC):
     name: str = "base"
 

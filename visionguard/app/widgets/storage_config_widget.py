@@ -186,13 +186,27 @@ class StorageConfigWidget(QWidget):
         self.spn_max_dur.setSuffix(" s")
         self.spn_max_dur.setToolTip("Một người đứng yên trong vùng cả ca không được phép "
                                     "thành một file dài vô tận")
+        self.spn_clip_fps = QDoubleSpinBox()
+        self.spn_clip_fps.setRange(1, 60)
+        self.spn_clip_fps.setSuffix(" fps")
+        self.spn_clip_width = QSpinBox()
+        self.spn_clip_width.setRange(160, 3840)
+        self.spn_clip_width.setSingleStep(160)
+        self.spn_clip_width.setSuffix(" px")
+        self.spn_clip_memory = QSpinBox()
+        self.spn_clip_memory.setRange(8, 256)
+        self.spn_clip_memory.setSuffix(" MiB")
+        self.spn_clip_memory.setToolTip("Trần bộ đệm mỗi camera; cả nhóm tối đa 256 MiB. "
+                                      "Đoạn trước sự kiện có thể ngắn hơn khi chạm trần.")
 
         # One pair per row, not two. Two label-field pairs side by side is four columns,
         # which needed more width than the panel has - the same mistake that put a
         # horizontal scroll bar under the PLC tab.
         pairs = (("Trước", self.spn_pre), ("Sau", self.spn_post),
                  ("Cỡ hình", self.spn_scale), ("Xoá sau", self.spn_clip_days),
-                 ("Tối đa", self.spn_cap), ("Dài nhất", self.spn_max_dur))
+                 ("Tối đa", self.spn_cap), ("Dài nhất", self.spn_max_dur),
+                 ("FPS ghi", self.spn_clip_fps), ("Rộng tối đa", self.spn_clip_width),
+                 ("Bộ đệm / camera", self.spn_clip_memory))
         for i, (text, field) in enumerate(pairs):
             grid.addWidget(QLabel(text), 1 + i, 0)
             grid.addWidget(field, 1 + i, 1)
@@ -275,6 +289,8 @@ class StorageConfigWidget(QWidget):
             (self.spn_post, cfg.clip.post_roll_s), (self.spn_scale, cfg.clip.scale),
             (self.spn_clip_days, cfg.clip.retention_days), (self.spn_cap, cfg.clip.max_total_gb),
             (self.spn_max_dur, cfg.clip.max_duration_s),
+            (self.spn_clip_fps, cfg.clip.fps or cfg.clip.capture_fps),
+            (self.spn_clip_width, cfg.clip.max_width), (self.spn_clip_memory, cfg.clip.max_buffer_mb),
             (self.spn_event_days, cfg.retention.event_days), (self.spn_log_days, cfg.retention.log_days),
             (self.spn_max_rows, cfg.retention.event_max_rows),
             (self.spn_interval, cfg.retention.interval_hours),
@@ -307,6 +323,10 @@ class StorageConfigWidget(QWidget):
         clip.retention_days = self.spn_clip_days.value()
         clip.max_total_gb = self.spn_cap.value()
         clip.max_duration_s = self.spn_max_dur.value()
+        clip.fps = self.spn_clip_fps.value()
+        clip.capture_fps = self.spn_clip_fps.value()
+        clip.max_width = self.spn_clip_width.value()
+        clip.max_buffer_mb = self.spn_clip_memory.value()
         ret = cfg.retention
         ret.log_dir = self.edt_log_dir.text().strip() or "logs"
         ret.snapshot_days = self.spn_snap_days.value()

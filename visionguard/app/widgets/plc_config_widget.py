@@ -15,7 +15,7 @@ from PySide6.QtWidgets import (QCheckBox, QComboBox, QDoubleSpinBox, QFormLayout
                                QHeaderView, QLabel, QLineEdit, QPushButton, QScrollArea, QSpinBox, QTableWidget,
                                QTableWidgetItem, QTabWidget, QVBoxLayout, QWidget)
 
-from ...config.schemas import FaultPersonOutput, FrameFormat, PlcConfig, SignalMode
+from ...config.schemas import FaultPersonOutput, FrameFormat, PlcConfig
 from ...plc.device_address import is_valid_device
 from ..theme import COLOR_ERROR, COLOR_OK, COLOR_TEXT_DIM, COLOR_WARN
 from .form_helpers import AdvancedSection, advanced_checkbox, hint, page_header
@@ -85,7 +85,6 @@ class PlcConfigWidget(QWidget):
         self.tabs.addTab(self._build_connection(), "Connection")
         self.devices_page = self._build_devices()
         self.tabs.addTab(self.devices_page, "Devices")
-        self.tabs.addTab(self._build_system(), "System")
         self.tabs.addTab(self.io_test, "Manual I/O")
         self.tabs.addTab(self._build_memory(), "Memory")
         lay.addWidget(self.tabs, 1)
@@ -187,6 +186,7 @@ class PlcConfigWidget(QWidget):
         self.lbl_status.setWordWrap(True)
         gl.addWidget(self.lbl_status, 2, 0, 1, 2)
         lay.addWidget(g_ctl)
+        lay.addWidget(self._build_heartbeat())
         lay.addStretch(1)
         return page
 
@@ -204,45 +204,14 @@ class PlcConfigWidget(QWidget):
         self.roi_mapping.setVisible(enabled)
         self.lbl_camera_regions.setVisible(not enabled)
 
-    def _build_system(self) -> QWidget:
-        page, lay = _page()
-
-        g_map = QGroupBox("SYSTEM OUTPUTS")
-        fm = QFormLayout(g_map)
-        self.edt_person = QLineEdit()
-        self.edt_clear = QLineEdit()
-        fm.addRow("Có người chung (tùy chọn)", self.edt_person)
-        fm.addRow("Hết người (CLEAR)", self.edt_clear)
-        fm.addRow(hint("Heartbeat và các đầu ra hệ thống. Gán bit cho từng ROI tại Devices."))
-
-        self.cmb_signal = QComboBox()
-        self.cmb_signal.addItem("Mode A - bit riêng từng ROI", SignalMode.SINGLE_BIT.value)
-        self.cmb_signal.addItem("Mode B - thêm bit CLEAR", SignalMode.DUAL_BIT.value)
-        self.edt_camera = QLineEdit()
-        self.edt_ai = QLineEdit()
-        self.edt_fault = QLineEdit()
-        self.edt_hb = QLineEdit()
-        self.edt_word = QLineEdit()
-        self.chk_word = QCheckBox("Ghi status word")
-        fm.addRow("Signal mode", self.cmb_signal)
-        fm.addRow("Camera OK", self.edt_camera)
-        fm.addRow("AI Running", self.edt_ai)
-        fm.addRow("System Fault", self.edt_fault)
-        fm.addRow("Heartbeat", self.edt_hb)
-        fm.addRow("", self.chk_word)
-        fm.addRow("Status word", self.edt_word)
-        self.advanced.rows(fm, self.edt_person, self.edt_clear, self.cmb_signal, self.edt_camera, self.edt_ai, self.edt_fault,
-                           self.chk_word, self.edt_word)
-        self.lbl_word_hint = hint("Status word: 0 CLEAR, 1 OCCUPIED, 2 CAMERA ERROR, 3 PLC ERROR, "
-                                  "4 AI ERROR, 5 STOPPED.")
-        fm.addRow(self.lbl_word_hint)
-        self.advanced.row(fm, self.lbl_word_hint)
-        lay.addWidget(g_map)
-
+    def _build_heartbeat(self) -> QGroupBox:
         g_hb = QGroupBox("HEARTBEAT && FAIL-SAFE")
         fh = QFormLayout(g_hb)
         self.chk_hb = QCheckBox("Bật heartbeat")
         self.chk_hb.setToolTip("Bit đảo 0/1 liên tục để PLC biết phần mềm còn sống")
+        self.edt_hb = QLineEdit()
+        self.edt_hb.setPlaceholderText("M100")
+        self.edt_hb.textChanged.connect(self._validate_devices)
         self.spn_hb = QSpinBox()
         self.spn_hb.setRange(100, 60000)
         self.spn_hb.setSuffix(" ms")
@@ -250,22 +219,13 @@ class PlcConfigWidget(QWidget):
         self.cmb_fault_person = QComboBox()
         self.cmb_fault_person.addItem("Giữ nguyên giá trị cuối", FaultPersonOutput.HOLD.value)
         self.cmb_fault_person.addItem("Ép ON (coi như có người)", FaultPersonOutput.ON.value)
-        self.cmb_fault_person.addItem("Ép OFF (PLC tự đọc bit FAULT)", FaultPersonOutput.OFF.value)
-        self.chk_clear_off = QCheckBox("CLEAR = OFF khi lỗi")
-        self.chk_clear_off.setToolTip("Khi hệ thống lỗi, ép bit CLEAR về 0 - không bao giờ báo vùng trống")
+        self.cmb_fault_person.addItem("Ép OFF (PLC tự theo dõi heartbeat)", FaultPersonOutput.OFF.value)
         fh.addRow("", self.chk_hb)
+        fh.addRow("Heartbeat bit", self.edt_hb)
         fh.addRow("Chu kỳ heartbeat", self.spn_hb)
         fh.addRow("Bit ROI khi FAULT", self.cmb_fault_person)
-        fh.addRow("", self.chk_clear_off)
         fh.addRow(hint("Khi mất camera hoặc mất kênh sự kiện, phần mềm không bao giờ tự báo HẾT NGƯỜI."))
-        lay.addWidget(g_hb)
-
-        for e in (self.edt_person, self.edt_clear, self.edt_camera, self.edt_ai, self.edt_fault,
-                  self.edt_hb, self.edt_word):
-            e.setPlaceholderText("M100")
-            e.textChanged.connect(self._validate_devices)
-        lay.addStretch(1)
-        return page
+        return g_hb
 
     # ------------------------------------------------------------------ memory page
     def _build_memory(self) -> QWidget:
@@ -299,11 +259,9 @@ class PlcConfigWidget(QWidget):
             w.setEnabled(not on)
 
     def _validate_devices(self) -> None:
-        for e in (self.edt_person, self.edt_clear, self.edt_camera, self.edt_ai, self.edt_fault,
-                  self.edt_hb, self.edt_word):
-            txt = e.text().strip()
-            ok = (not txt) or is_valid_device(txt)
-            e.setStyleSheet("" if ok else f"border: 1px solid {COLOR_ERROR};")
+        txt = self.edt_hb.text().strip()
+        ok = (not txt) or is_valid_device(txt)
+        self.edt_hb.setStyleSheet("" if ok else f"border: 1px solid {COLOR_ERROR};")
 
     def set_status(self, text: str, ok: bool | None = None) -> None:
         color = COLOR_TEXT_DIM if ok is None else (COLOR_OK if ok else COLOR_ERROR)
@@ -329,9 +287,7 @@ class PlcConfigWidget(QWidget):
             it_val = QTableWidgetItem(text)
             it_val.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             if val:
-                m = self._config.mapping
-                it_val.setForeground(QColor(COLOR_ERROR if dev == m.device_person
-                                            else COLOR_ERROR if dev in self._roi_devices else COLOR_OK))
+                it_val.setForeground(QColor(COLOR_ERROR if dev in self._roi_devices else COLOR_OK))
             else:
                 it_val.setForeground(QColor(COLOR_TEXT_DIM))
             self.tbl_mem.setItem(row, 0, QTableWidgetItem(dev))
@@ -345,17 +301,7 @@ class PlcConfigWidget(QWidget):
         self.set_memory(self._memory)
 
     def _meanings(self) -> Dict[str, str]:
-        m = self._config.mapping
-        return {
-            m.device_person: "CO NGUOI / AREA OCCUPIED",
-            m.device_clear: "HET NGUOI / AREA CLEAR",
-            m.device_camera_ok: "Camera connected",
-            m.device_ai_running: "AI running",
-            m.device_fault: "System fault",
-            m.device_heartbeat: "Heartbeat",
-            m.device_status_word: "Status word",
-            **self._roi_devices,
-        }
+        return {self._config.mapping.device_heartbeat: "Heartbeat", **self._roi_devices}
 
     # ================================================================== config <-> widgets
     def set_config(self, cfg: PlcConfig) -> None:
@@ -374,22 +320,11 @@ class PlcConfigWidget(QWidget):
         self.spn_timeout.setValue(c.timeout_s)
         self.spn_retry.setValue(c.retry_count)
         self.chk_auto_reconnect.setChecked(c.auto_reconnect)
-        m = cfg.mapping
-        idx = self.cmb_signal.findData(cfg.signal_mode)
-        self.cmb_signal.setCurrentIndex(max(0, idx))
-        self.edt_person.setText(m.device_person)
-        self.edt_clear.setText(m.device_clear)
-        self.edt_camera.setText(m.device_camera_ok)
-        self.edt_ai.setText(m.device_ai_running)
-        self.edt_fault.setText(m.device_fault)
-        self.edt_hb.setText(m.device_heartbeat)
-        self.edt_word.setText(m.device_status_word)
-        self.chk_word.setChecked(cfg.word_output_enabled)
+        self.edt_hb.setText(cfg.mapping.device_heartbeat)
         self.chk_hb.setChecked(cfg.heartbeat.enabled)
         self.spn_hb.setValue(cfg.heartbeat.interval_ms)
         idx = self.cmb_fault_person.findData(cfg.failsafe.person_output_on_fault)
         self.cmb_fault_person.setCurrentIndex(max(0, idx))
-        self.chk_clear_off.setChecked(cfg.failsafe.clear_off_on_fault)
         self.btn_sim.blockSignals(True)
         self.btn_sim.setChecked(cfg.simulation_mode)
         self.btn_sim.blockSignals(False)
@@ -413,20 +348,10 @@ class PlcConfigWidget(QWidget):
         c.timeout_s = round(self.spn_timeout.value(), 2)
         c.retry_count = self.spn_retry.value()
         c.auto_reconnect = self.chk_auto_reconnect.isChecked()
-        cfg.signal_mode = str(self.cmb_signal.currentData())
-        m = cfg.mapping
-        m.device_person = self.edt_person.text().strip().upper()
-        m.device_clear = self.edt_clear.text().strip().upper()
-        m.device_camera_ok = self.edt_camera.text().strip().upper()
-        m.device_ai_running = self.edt_ai.text().strip().upper()
-        m.device_fault = self.edt_fault.text().strip().upper()
-        m.device_heartbeat = self.edt_hb.text().strip().upper()
-        m.device_status_word = self.edt_word.text().strip().upper()
-        cfg.word_output_enabled = self.chk_word.isChecked()
+        cfg.mapping.device_heartbeat = self.edt_hb.text().strip().upper()
         cfg.heartbeat.enabled = self.chk_hb.isChecked()
         cfg.heartbeat.interval_ms = self.spn_hb.value()
         cfg.failsafe.person_output_on_fault = str(self.cmb_fault_person.currentData())
-        cfg.failsafe.clear_off_on_fault = self.chk_clear_off.isChecked()
         return cfg
 
     def _apply(self) -> None:

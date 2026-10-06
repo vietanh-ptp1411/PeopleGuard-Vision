@@ -255,6 +255,18 @@ class RoiDeviceWidget(QWidget):
             ok = False
         self.edt_plc.setStyleSheet("" if ok else f"border: 1px solid {COLOR_ERROR};")
 
+    def apply_pending(self) -> None:
+        """Apply what was typed for the selected ROI but never confirmed with Apply."""
+        r = self._current()
+        if r is None:
+            return
+        pending = (self.edt_name.text().strip() not in ("", r.name)
+                   or self.edt_plc.text().strip().upper() != r.plc_device
+                   or self.chk_enabled.isChecked() != r.enabled
+                   or max(0, self.cmb_camera.currentIndex()) != int(getattr(r, "camera", 0)))
+        if pending:
+            self._apply_fields()
+
     def _apply_fields(self) -> None:
         r = self._current()
         if r is None:

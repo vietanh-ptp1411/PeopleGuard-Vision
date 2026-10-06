@@ -3,7 +3,7 @@
     "model_path": "D:/PeopleGuard-Vision/models/model2.pt",
     "confidence": 0.45,
     "iou": 0.5,
-    "device": "cpu",
+    "device": "cuda",
     "imgsz": 960,
     "max_fps": 8.0,
     "classes": [

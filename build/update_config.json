@@ -1,0 +1,10 @@
+{
+  "base": "release/VisionGuard-GPU-2026-10-01.zip",
+  "updates": [
+    "release/VisionGuard-GPU-Update-2026-10-02.zip",
+    "release/VisionGuard-GPU-Update-2026-10-04.zip"
+  ],
+  "output": "release",
+  "notes": "docs/RELEASE_NOTES.md",
+  "max_size_mb": 128
+}

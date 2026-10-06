@@ -5,10 +5,8 @@ One folder, not one file. A one-file build of this size would unpack several hun
 megabytes into a temp folder on every single launch - on a machine that restarts after a
 power cut that is the worst possible trade.
 
-Torch is the CPU build on purpose. The CUDA wheel is 4.4 GB against 526 MB and still
-demands an NVIDIA driver on the target; CPU inference was measured at 14-18 fps, which is
-comfortably above the 12 fps the detector is capped at. A site that wants the GPU installs
-from source instead.
+Torch comes from the selected, version-checked build environment. Keep its CPU/CUDA
+flavour and runtime versions unchanged when making a small customer update.
 """
 import sys
 from pathlib import Path

@@ -70,6 +70,11 @@ class CameraWorker(QThread):
         self._preview_sent_at = 0.0
         self._last_fps_emit = 0.0
         self._last_pos_emit = 0.0
+        self._frame_sink = None
+
+    def set_frame_sink(self, callback) -> None:
+        """A nonblocking recorder callback, independent of preview delivery."""
+        self._frame_sink = callback
 
     # ------------------------------------------------------------------ public API (any thread)
     @property
@@ -355,6 +360,9 @@ class CameraWorker(QThread):
             self._last_frame_time = now
             frame.camera = self.index      # the index travels with the picture
             self._buffer.put(frame)
+            sink = self._frame_sink
+            if sink is not None:
+                sink(frame.image, now)
             self._emit_preview(frame, now)
             self._fps.tick(now)
             if now - self._last_fps_emit > 0.5:

@@ -1,9 +1,9 @@
-"""Validate independent ROI bits against each other and system outputs."""
+"""Validate independent ROI bits against each other and the heartbeat."""
 from __future__ import annotations
 
 from typing import Dict
 
-from ..config.schemas import PlcConfig, SignalMode
+from ..config.schemas import PlcConfig
 from .device_address import DeviceAddressError, parse_device
 from .mitsubishi.mc_driver import series_uses_octal_xy
 
@@ -22,15 +22,7 @@ def validate_roi_devices(devices: Dict[str, str], cfg: PlcConfig, *, require_ass
     """Raise before writing anything if two logical outputs share a physical device."""
     octal = series_uses_octal_xy(cfg.connection.plc_series)
     used = {}
-    m = cfg.mapping
-    reserved = [("PERSON", m.device_person), ("Camera OK", m.device_camera_ok),
-                ("AI Running", m.device_ai_running), ("Fault", m.device_fault)]
-    if cfg.signal_mode == SignalMode.DUAL_BIT.value:
-        reserved.append(("CLEAR", m.device_clear))
-    if cfg.heartbeat.enabled:
-        reserved.append(("Heartbeat", m.device_heartbeat))
-    if cfg.word_output_enabled:
-        reserved.append(("Status word", m.device_status_word))
+    reserved = [("Heartbeat", cfg.mapping.device_heartbeat)] if cfg.heartbeat.enabled else []
     for label, text in reserved:
         if text:
             address = parse_device(text, xy_octal=octal)
@@ -49,9 +41,19 @@ def validate_roi_devices(devices: Dict[str, str], cfg: PlcConfig, *, require_ass
         used[address] = rid
 
 
+NO_ZONE_MESSAGE = "Chưa vẽ zone nào: vẽ vùng tại tab Zones, rồi gán bit cho từng vùng tại PLC → Devices"
+
+
 def validate_rois(rois, cfg: PlcConfig, camera_count: int) -> None:
-    """Validate stored polygons as well as their device assignments."""
+    """Validate stored polygons as well as their device assignments.
+
+    The ROI bits are the only occupancy signal the PLC gets, so with no zone drawn the PLC
+    hears nothing at all - that is an error, not a whole-picture fallback. Zones that exist
+    but are all switched off are a deliberate pause and stay allowed, so their bits can clear.
+    """
     watched = [roi for roi in rois if roi.is_include]
+    if not watched:
+        raise DeviceAddressError(NO_ZONE_MESSAGE)
     validate_roi_devices({roi.id: roi.plc_device for roi in watched}, cfg)
     enabled = [roi for roi in watched if roi.enabled]
     validate_roi_devices({roi.id: roi.plc_device for roi in enabled}, cfg, require_assigned=True)

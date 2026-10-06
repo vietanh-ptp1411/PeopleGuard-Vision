@@ -57,6 +57,12 @@ class RegionMappingManager:
         self._regions: List[RegionMapping] = []
         self._lock = threading.RLock()
         self._listeners: List[Callable[[], None]] = []
+        self._dirty = False
+
+    @property
+    def dirty(self) -> bool:
+        """Changed since the last load/save."""
+        return self._dirty
 
     # ------------------------------------------------------------------ listeners
     def add_listener(self, cb: Callable[[], None]) -> None:
@@ -119,6 +125,7 @@ class RegionMappingManager:
                     break
             else:
                 self._regions.append(mapping)
+            self._dirty = True
         self._notify()
 
     def delete(self, region_id: str, camera: int = 0) -> bool:
@@ -128,6 +135,7 @@ class RegionMappingManager:
             self._regions = [r for r in self._regions
                              if not (r.camera_region_id == rid and int(r.camera) == cam)]
             removed = len(self._regions) != before
+            self._dirty = self._dirty or removed
         if removed:
             self._notify()
         return removed
@@ -135,6 +143,7 @@ class RegionMappingManager:
     def clear(self) -> None:
         with self._lock:
             self._regions.clear()
+            self._dirty = True
         self._notify()
 
     def ensure(self, region_id: str, camera: int = 0) -> RegionMapping:
@@ -162,6 +171,7 @@ class RegionMappingManager:
             return False
         with self._lock:
             self._regions = [r for r in regions if r.camera_region_id]
+            self._dirty = False
         log.info("Loaded %d region mapping(s)", len(self._regions))
         self._notify()
         return True
@@ -174,6 +184,8 @@ class RegionMappingManager:
             tmp = self.path.with_suffix(".tmp")
             tmp.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
             tmp.replace(self.path)
+            with self._lock:
+                self._dirty = False
             log.info("Saved %d region mapping(s)", len(payload["regions"]))
             return True
         except OSError as exc:

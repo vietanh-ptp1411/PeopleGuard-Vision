@@ -10,6 +10,7 @@ import logging
 import os
 import threading
 import time
+from dataclasses import replace
 from typing import Dict, List, Optional
 
 from PySide6.QtCore import QObject, QTimer, Signal
@@ -27,11 +28,12 @@ from ...config.schemas import (AIConfig, AppConfig, CameraConfig, CameraType, De
 from ...logic.camera_event_state_machine import CameraEventStateMachine, ZoneState
 from ...logic.occupancy_state_machine import AreaStatus, OccupancyTracker
 from ...logic.pipeline import PipelineResult, ProcessingPipeline
-from ...plc.plc_manager import WORD_AI_ERROR, WORD_CAMERA_ERROR, PlcOutputState
+from ...plc.plc_manager import PlcOutputState
 from ...plc.roi_mapping import normalize_roi_device, validate_roi_devices, validate_rois
 from ...roi.roi_manager import RoiManager
 from ...roi.roi_model import RoiType
-from ...storage.event_repository import EventRepository, EventType
+from ...storage.event_repository import EventType
+from ...storage.event_worker import EventWorker
 from ...storage import housekeeping
 from ...storage.clip_recorder import ClipRecorder
 from ...storage.snapshot_saver import SnapshotSaver
@@ -102,8 +104,12 @@ class SystemController(QObject):
         self.buffer = LatestFrameBuffer()
         self.detector = YoloDetector()
         self.pipeline = ProcessingPipeline(self.roi_manager, self.settings.ai.logic)
-        self.events = EventRepository(self.settings.app.events_db_path)
+        self.events = EventWorker(self.settings.app.events_db_path, self)
+        self.events.saved.connect(self.event_logged)
+        self.events.failed.connect(self.message)
+        self.events.start()
         self.snapshots = SnapshotSaver(self.settings.app.snapshot)
+        self.snapshots.on_failure = self.events.clear_snapshot_path
 
         # workers
         self.camera_worker = CameraWorker(self.camera_manager, self.buffer, self.settings.camera)
@@ -154,6 +160,9 @@ class SystemController(QObject):
         self._channel_states: Dict[int, str] = {0: EventChannelState.DISCONNECTED}
         self._last_frames: Dict[int, Frame] = {}
         self._results: Dict[int, PipelineResult] = {}
+        self._result_times: Dict[int, float] = {}
+        self._retired_workers = []
+        self._retired_recorders = []
         self.recorders: List[ClipRecorder] = []
         self._build_camera_group()
 
@@ -216,17 +225,17 @@ class SystemController(QObject):
             index = len(self.camera_workers) - 1
             worker = self.camera_workers.pop()
             events = self.event_workers.pop()
-            self.pipelines.pop()
+            self.pipelines.pop().close()
             self.buffers.pop()
             self.event_states.pop()
             self._camera_states.pop(index, None)
             self._channel_states.pop(index, None)
             self._last_frames.pop(index, None)
             self._results.pop(index, None)
+            self._result_times.pop(index, None)
             for w in (worker, events):
                 w.stop_worker()
-            for w in (worker, events):
-                w.wait(1500)
+                self._retired_workers.append(w)
             log.info("Camera %d removed from the group", index + 1)
 
         while len(self.camera_workers) < want:
@@ -247,6 +256,10 @@ class SystemController(QObject):
             self._wire_secondary(worker, events, index)
             worker.start()
             events.start()
+            if self._system_running:
+                worker.request_start()
+                if cfg.is_ai_camera:
+                    events.request_connect()
             log.info("Camera %d added to the group (%s)", index + 1, cfg.label(index))
 
         self.inference_worker.set_sources(list(zip(self.buffers, self.pipelines)))
@@ -263,13 +276,19 @@ class SystemController(QObject):
         clip = self.settings.app.clip
         want = len(self.camera_workers) if clip.enabled else 0
         while len(self.recorders) > want:
-            self.recorders.pop().stop()
+            recorder = self.recorders.pop()
+            recorder.stop(timeout=0)
+            self._retired_recorders.append(recorder)
+        # A camera group shares 256 MiB of recorder buffers at most.
+        clip = replace(clip, max_buffer_mb=min(max(1, clip.max_buffer_mb), max(1, 256 // max(1, want))))
         while len(self.recorders) < want:
             index = len(self.recorders)
             self.recorders.append(ClipRecorder(index, cfg.label(index), clip))
         for index, rec in enumerate(self.recorders):
             rec.set_config(clip)
             rec.set_label(cfg.label(index))
+        for index, worker in enumerate(self.camera_workers):
+            worker.set_frame_sink(self.recorders[index].submit if index < len(self.recorders) else None)
 
     def camera_occupied(self, index: int) -> bool:
         """Is THIS camera seeing a person - as opposed to the group as a whole."""
@@ -303,10 +322,22 @@ class SystemController(QObject):
     def _wire_secondary(self, worker, events, index: int) -> None:
         """Cameras 2..N report through the same slots; the index rides along."""
         worker.frame_ready.connect(self._on_frame)
-        worker.state_changed.connect(lambda st, msg, i=index: self._on_secondary_camera_state(i, st, msg))
-        events.event_received.connect(lambda ev, i=index: self._on_camera_event(ev, i))
-        events.state_changed.connect(lambda st, msg, i=index: self._on_secondary_channel_state(i, st, msg))
+        worker.state_changed.connect(lambda st, msg, i=index, w=worker:
+                                     self._on_secondary_camera_state(i, st, msg)
+                                     if i < len(self.camera_workers) and self.camera_workers[i] is w else None)
+        events.event_received.connect(lambda ev, i=index, w=events: self._on_camera_event(ev, i)
+                                      if i < len(self.event_workers) and self.event_workers[i] is w else None)
+        events.state_changed.connect(lambda st, msg, i=index, w=events:
+                                     self._on_secondary_channel_state(i, st, msg)
+                                     if i < len(self.event_workers) and self.event_workers[i] is w else None)
         events.raw_event.connect(self.raw_camera_event)
+
+    def _reap_workers(self) -> None:
+        for worker in self._retired_workers[:]:
+            if worker.wait(0):
+                self._retired_workers.remove(worker)
+                worker.deleteLater()
+        self._retired_recorders[:] = [rec for rec in self._retired_recorders if rec._thread.is_alive()]
 
     def _on_secondary_camera_state(self, index: int, state: str, msg: str) -> None:
         if state in ("TEST_OK", "TEST_FAIL"):
@@ -367,6 +398,7 @@ class SystemController(QObject):
         iw.result_ready.connect(self._on_result)
         iw.model_loaded.connect(self._on_model_loaded)
         iw.model_load_failed.connect(self._on_model_failed)
+        iw.model_unloaded.connect(self._on_model_unloaded)
         iw.detection_state.connect(self._on_detection_state)
         iw.inference_error.connect(self._on_inference_error)
         ew = self.event_worker
@@ -403,7 +435,9 @@ class SystemController(QObject):
             for ev in self.event_workers:
                 ev.request_disable()
         if cfg.mode_enum != previous_mode:
-            self.detection_mode_changed.emit(cfg.detection_mode)
+            new_mode = cfg.mode_enum
+            cfg.detection_mode = previous_mode.value
+            self.set_detection_mode(new_mode)
         self.message.emit("Camera configuration saved")
 
     def camera_connect(self) -> None:
@@ -518,7 +552,11 @@ class SystemController(QObject):
         for index, worker in enumerate(self.camera_workers):
             worker.set_config(cfg.unit(index))
         if mode == DetectionMode.AI_CAMERA:
-            self.inference_worker.stop_detection()
+            # A subsequent immediate PC-mode START must request a load, not start a
+            # model which is already scheduled for unloading on another thread.
+            self._model_loaded = False
+            self._detecting = False
+            self.inference_worker.request_unload()
             for index, machine in enumerate(self.event_states):
                 machine.reset()
                 self.event_workers[index].set_config(cfg.unit(index).ai_camera, cfg.brand_enum)
@@ -602,8 +640,8 @@ class SystemController(QObject):
         self.inference_worker.set_max_fps(cfg.detector.max_fps)
         new = cfg.detector
         if self._model_loaded:
-            reload_needed = (old.model_path, old.device, old.imgsz, old.tracking_enabled, old.half) != (
-                new.model_path, new.device, new.imgsz, new.tracking_enabled, new.half)
+            reload_needed = (old.model_path, old.device, old.imgsz, old.tracking_enabled, old.half, old.cpu_threads) != (
+                new.model_path, new.device, new.imgsz, new.tracking_enabled, new.half, new.cpu_threads)
             if reload_needed:
                 self.message.emit("AI settings saved - press 'Load Model' to apply model/device changes")
             else:
@@ -647,18 +685,19 @@ class SystemController(QObject):
         self.inference_worker.stop_detection()
 
     # ================================================================== PLC slots
-    def apply_plc_config(self, cfg: PlcConfig) -> bool:
+    def apply_plc_config(self, cfg: PlcConfig) -> str:
+        """Save and take the PLC settings live. Returns why they were refused, or ""."""
         try:
             validate_roi_devices({r.id: r.plc_device for r in self.roi_manager.include_rois()}, cfg)
         except ValueError as exc:
             self.message.emit(str(exc))
-            return False
+            return str(exc)
         self.settings.plc = cfg
         self.cm.save("plc")
         self.plc_worker.reconfigure(cfg)
         self.message.emit("PLC configuration saved" + (" (simulation)" if cfg.simulation_mode else ""))
         self._recompute(force_plc=True)
-        return True
+        return ""
 
     def set_simulation(self, on: bool) -> None:
         if self.settings.plc.simulation_mode == on:
@@ -750,6 +789,8 @@ class SystemController(QObject):
         shortened a retention rule expects the disk to shrink now, not in six hours.
         """
         was_recording = self.settings.app.clip.enabled
+        if cfg.events_db_path != self.settings.app.events_db_path:
+            self.events.set_path(cfg.events_db_path)
         self.settings.app = cfg
         self.cm.save("app")
         self.snapshots.set_config(cfg.snapshot)
@@ -769,8 +810,9 @@ class SystemController(QObject):
         if self._system_running:
             return
         ai_mode = self.ai_camera_mode
-        if not ai_mode and not self.roi_manager.include_rois():
-            self.message.emit("No zone drawn - the whole picture of every camera is the monitored area")
+        mapping_error = self.roi_mapping_error()
+        if mapping_error:
+            self.message.emit(mapping_error)
         self._system_running = True
         self._start_time = time.monotonic()
         self._got_data_since_start = False
@@ -800,6 +842,7 @@ class SystemController(QObject):
             self._last_result = None
             self._last_result_time = 0.0
             self._results.clear()
+            self._result_times.clear()
             for pipeline in self.pipelines:
                 pipeline.reset()
             if self._model_loaded:
@@ -834,16 +877,20 @@ class SystemController(QObject):
         except Exception:
             pass
         self._event_timer.stop()
-        for rec in self.recorders:
-            rec.stop()
+        recorder_done = all([rec.stop() for rec in [*self.recorders, *self._retired_recorders]])
         self.recorders.clear()
-        workers = (self.inference_worker, self.plc_worker, *self.camera_workers, *self.event_workers)
+        workers = (self.inference_worker, self.plc_worker, *self.camera_workers, *self.event_workers,
+                   *self._retired_workers)
         for w in workers:
             w.stop_worker()
         stubborn = [w for w in workers if not self._join(w)]
-        self.snapshots.shutdown()
-        self.events.close()
-        if stubborn:
+        snapshots_done = self.snapshots.shutdown()
+        self.events.stop_worker()
+        if not self._join(self.events):
+            stubborn.append(self.events)
+        if stubborn or not snapshots_done or not recorder_done:
+            if not snapshots_done:
+                log.error("Snapshot writes did not finish before shutdown deadline")
             self._leave_now(stubborn)
 
     #: A worker that outlives this call is not a warning, it is a crash: Qt calls qFatal
@@ -893,22 +940,23 @@ class SystemController(QObject):
         here - the launcher restarts a process that exits, but it cannot see one that
         is wedged.
 
-        Leaving immediately is safe because nothing is left to write: the recorders are
-        closed, the event database is closed, and the configuration was saved before
-        shutdown was even called. Exit code 0 because the operator did ask it to close.
+        This is the final deadline after cooperative stop. Report unfinished writes
+        explicitly; a blocked disk/driver must not be presented as a successful flush.
         """
-        names = ", ".join(sorted({type(w).__name__ for w in stubborn}))
-        log.error("%s would not stop. Everything is saved; leaving the process now "
-                  "rather than destroying a thread that is still running.", names)
+        names = ", ".join(sorted({type(w).__name__ for w in stubborn})) or "media writer"
+        log.error("Shutdown deadline exceeded: %s. Pending writes may be incomplete; forcing exit.", names)
         logging.shutdown()
         os._exit(0)
 
     # ================================================================== worker callbacks
     def _on_frame(self, frame: Frame) -> None:
+        sender = self.sender()
         try:
+            if frame.camera >= len(self.camera_workers):
+                return
+            if isinstance(sender, CameraWorker) and self.camera_workers[frame.camera] is not sender:
+                return
             self._last_frames[frame.camera] = frame
-            if self.settings.app.clip.enabled and frame.camera < len(self.recorders):
-                self.recorders[frame.camera].submit(frame.image, frame.timestamp)
             if frame.camera == 0:
                 self._last_frame = frame  # newest picture, used for AI camera event snapshots
             self.frame_ready.emit(frame)
@@ -917,7 +965,9 @@ class SystemController(QObject):
             # preview that stops forever after one unlucky exception is worse than the
             # exception, and the worker would otherwise wait on an acknowledgement that
             # never comes.
-            if 0 <= frame.camera < len(self.camera_workers):
+            if isinstance(sender, CameraWorker):
+                sender.preview_delivered()
+            elif 0 <= frame.camera < len(self.camera_workers):
                 self.camera_workers[frame.camera].preview_delivered()
 
     def _on_camera_state(self, state: str, msg: str) -> None:
@@ -937,10 +987,25 @@ class SystemController(QObject):
         self._recompute()
 
     def _on_result(self, result: PipelineResult) -> None:
+        try:
+            if not 0 <= result.camera < len(self.pipelines):
+                return
+            if result.source_token and result.source_token != id(self.pipelines[result.camera]):
+                return
+            if self.ai_camera_mode:
+                return
+            if result.detection_generation != self.inference_worker.requested_generation:
+                return
+            self._process_result(result)
+        finally:
+            self.inference_worker.result_delivered(result.camera, result.source_token)
+
+    def _process_result(self, result: PipelineResult) -> None:
         self._results[result.camera] = result
         if result.camera == 0:
             self._last_result = result
         self._last_result_time = time.monotonic()
+        self._result_times[result.camera] = result.produced_at
         if self._ai_error:
             self._ai_error = ""
         roi_names = {r.id: r.name for r in result.rois}
@@ -960,6 +1025,9 @@ class SystemController(QObject):
         self._recompute()
 
     def _on_model_loaded(self, info) -> None:
+        if self.ai_camera_mode:
+            self.inference_worker.request_unload()
+            return
         self._model_loaded = True
         self._set_preview_fps(self.settings.app.ui_fps_limit)
         self.model_status.emit(True, f"Model loaded: {info.summary()}")
@@ -967,6 +1035,16 @@ class SystemController(QObject):
         if self._start_detection_when_loaded:
             self._start_detection_when_loaded = False
             self.inference_worker.start_detection()
+        self._recompute()
+
+    def _on_model_unloaded(self) -> None:
+        self._model_loaded = False
+        self._detecting = False
+        self._set_preview_fps(self.settings.app.ui_fps_limit)
+        self.model_status.emit(False, "Model unloaded")
+        if not self.ai_camera_mode and self._system_running:
+            self._start_detection_when_loaded = True
+            self.load_model()
         self._recompute()
 
     def _on_model_failed(self, msg: str) -> None:
@@ -1071,24 +1149,10 @@ class SystemController(QObject):
     # ================================================================== status derivation
     def _tick(self) -> None:
         """Watchdog: detect a silent AI pipeline and emit drop statistics."""
-        if self.ai_camera_mode:
-            self.dropped_frames.emit(self.buffer.dropped)
-            return
-        if self._system_running and self._camera_state == CameraState.STREAMING and not self._ai_error:
-            now = time.monotonic()
-            if self._last_result is not None and now - self._last_result_time > RESULT_TIMEOUT_S:
-                self._ai_error = f"No AI result for {RESULT_TIMEOUT_S:.0f}s"
-                self._recompute()
-            elif (self._last_result is None and not self._start_detection_when_loaded
-                  and now - self._start_time > STARTUP_GRACE_S):
-                # Loading the model is not a fault. On a CPU-only machine the first load
-                # plus warm-up runs past ten seconds, and reporting FAULT there would raise
-                # the PLC's fault bit on every single boot.
-                self._ai_error = f"No AI result {STARTUP_GRACE_S:.0f}s after start"
-                self._recompute()
-        elif self._system_running and self._last_result is None and time.monotonic() - self._start_time > STARTUP_GRACE_S:
-            self._recompute()  # grace period over: STARTING -> FAULT if camera/AI still not up
-        self.dropped_frames.emit(self.buffer.dropped)
+        self._reap_workers()
+        if self._system_running:
+            self._recompute()
+        self.dropped_frames.emit(sum(buffer.dropped for buffer in self.buffers))
 
     def _recompute(self, force_plc: bool = False) -> None:
         running = self._system_running
@@ -1099,23 +1163,30 @@ class SystemController(QObject):
         if ai_mode:
             # The camera detects; the event channel is what must be alive. Once it is online,
             # silence means "nobody in the zone", so there is always valid information.
-            detector_ok = self._event_channel == EventChannelState.ONLINE
+            offline = [i for i in range(self.camera_count)
+                       if self._channel_states.get(i) != EventChannelState.ONLINE]
+            detector_ok = not offline
             has_data = detector_ok
-            detector_reason = self._event_message or "AI event channel offline"
+            detector_reason = ("AI event channel offline: " + ", ".join(str(i + 1) for i in offline))
             # With simulated events there is no camera at all, so a missing picture is not a fault.
             simulated = self.settings.camera.ai_camera.provider_enum == EventProviderType.MOCK
             video_matters = bool(logic.fault_on_video_loss) and not simulated
             detector_matters = bool(logic.fault_on_event_loss)
         else:
-            detector_ok = self._model_loaded and self._detecting and not self._ai_error
-            has_data = self._last_result is not None
-            detector_reason = self._ai_error or "AI not running"
+            now = time.monotonic()
+            missing = [i for i in range(self.camera_count) if i not in self._result_times]
+            stale = [i for i, stamp in self._result_times.items() if now - stamp > RESULT_TIMEOUT_S]
+            detector_ok = self._model_loaded and self._detecting and not self._ai_error and not stale
+            has_data = not missing
+            detector_reason = self._ai_error or ("No recent AI result: camera " +
+                                                ", ".join(str(i + 1) for i in stale or missing))
+            if missing and now - self._start_time > STARTUP_GRACE_S and not self._start_detection_when_loaded:
+                detector_ok = False
             video_matters = True
             detector_matters = True
         area_occupied = self.group_occupied()
-        camera_ok = video_ok
 
-        fault, code, reason = False, 0, ""
+        fault, reason = False, ""
         starting = False
         if running:
             # Right after START the links may still be coming up: report STARTING (not FAULT)
@@ -1139,18 +1210,18 @@ class SystemController(QObject):
                 if in_grace and not hard_error:
                     starting = True
                 else:
-                    fault, code, reason = True, WORD_CAMERA_ERROR, f"Video {self._camera_state}"
+                    fault, reason = True, f"Video {self._camera_state}"
             elif detector_matters and not detector_ok:
                 if in_grace and not hard_error:
                     starting = True
                 else:
-                    fault, code, reason = True, WORD_AI_ERROR, detector_reason
+                    fault, reason = True, detector_reason
             elif not has_data:
                 starting = True
 
         mapping_error = self.roi_mapping_error()
         if running and mapping_error:
-            fault, code, reason = True, WORD_AI_ERROR, mapping_error
+            fault, reason = True, mapping_error
             starting = False
 
         if not running:
@@ -1220,11 +1291,7 @@ class SystemController(QObject):
                     zone_occupied[roi.id] = res.roi_occupied[roi.id]
         out = PlcOutputState(
             running=running,
-            area_occupied=bool(area_occupied) if running else False,
-            camera_ok=camera_ok,
-            ai_ok=detector_ok,
             fault=fault,
-            fault_code=code,
             roi_occupied=zone_occupied,
             roi_devices=zone_devices,
         )
@@ -1235,9 +1302,7 @@ class SystemController(QObject):
 
     # ================================================================== helpers
     def _log_event(self, event_type: str, roi_id: str = "", roi_name: str = "", details: str = "", snapshot_path: str = "") -> None:
-        rec = self.events.add(event_type, roi_id, roi_name, details, snapshot_path)
-        if rec is not None:
-            self.event_logged.emit(rec)
+        self.events.add(event_type, roi_id, roi_name, details, snapshot_path)
 
     def status_summary(self) -> Dict[str, str]:
         if self.ai_camera_mode:

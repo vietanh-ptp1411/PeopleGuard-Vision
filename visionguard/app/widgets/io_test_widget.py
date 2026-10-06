@@ -111,15 +111,7 @@ class IoTestWidget(QWidget):
             self.quick_layout.removeWidget(w)
             w.deleteLater()
         self._quick_buttons.clear()
-        rows: List[Tuple[str, str, bool]] = [
-            ("Area Occupied", mapping.device_person, True),
-            ("Area Clear", mapping.device_clear, True),
-            ("Camera OK", mapping.device_camera_ok, True),
-            ("AI Running", mapping.device_ai_running, True),
-            ("System Fault", mapping.device_fault, True),
-            ("Heartbeat", mapping.device_heartbeat, True),
-            ("Status Word", mapping.device_status_word, False),
-        ]
+        rows: List[Tuple[str, str, bool]] = [("Heartbeat", mapping.device_heartbeat, True)]
         rows.extend((label, dev, True) for dev, label in self._roi_devices.items())
         r = 0
         for label, dev, is_bit in rows:

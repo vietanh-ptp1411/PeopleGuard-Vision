@@ -9,11 +9,14 @@ from typing import Any, Dict, Optional, Tuple
 from PySide6.QtCore import QThread, Signal
 
 from ..config.schemas import PlcConfig
-from ..plc.base_plc import PlcError
+from ..plc.base_plc import PlcConfigError, PlcError
 from ..plc.mitsubishi.mc_protocol import McProtocolError
 from ..plc.plc_manager import PlcManager, PlcOutputState
 
 log = logging.getLogger("PLC")
+
+#: A state write the PLC refused is retried this often until it goes through.
+WRITE_RETRY_S = 1.0
 
 
 class PlcWorker(QThread):
@@ -41,6 +44,8 @@ class PlcWorker(QThread):
         self._last_latency_emit = 0.0
         #: The last health the controller reported. The heartbeat is gated on it.
         self._healthy = False
+        #: When to rewrite the whole state after a write failed (0 = nothing to retry).
+        self._retry_write_at = 0.0
 
     # ------------------------------------------------------------------ API (any thread)
     @property
@@ -116,9 +121,12 @@ class PlcWorker(QThread):
                 self.connection_changed.emit(False, "Disconnected")
             elif name == "apply":
                 self._apply_pending()
+            elif name == "resync":
+                self._write_state(None)
             elif name == "write":
                 device, value = arg
                 self._manager.manual_write(device, int(value))
+                self._clear_protocol_fault()       # the PLC accepts writes again
                 self.device_written.emit(device, int(value))
                 self.io_result.emit(True, f"WRITE {device} = {int(value)} OK")
                 self._emit_memory(force=True)
@@ -146,9 +154,7 @@ class PlcWorker(QThread):
             self._reconnect_attempt = 0
             self.connection_changed.emit(True, self._manager.driver.name)
             try:
-                written = self._manager.resync()
-                for dev, val in written:
-                    self.device_written.emit(dev, val)
+                self._write_state(None)
             except PlcError as exc:
                 self._on_comm_error(exc)
             self._emit_memory(force=True)
@@ -163,14 +169,33 @@ class PlcWorker(QThread):
         if not self._manager.is_connected():
             self._manager._last_state = state  # remember for resync after reconnect
             return
-        # A heartbeat that keeps ticking while the camera is dead tells the PLC the
-        # zone is being watched when it is not. Remember the health and gate on it.
+        self._write_state(state)
+
+    def _write_state(self, state: Optional[PlcOutputState]) -> None:
+        """Write `state`, or with None rewrite the whole last state (after a (re)connect).
+
+        A heartbeat that keeps ticking while the camera is dead tells the PLC the zone is
+        being watched when it is not, so the heartbeat is gated on the health of the state
+        that actually reached the PLC.
+
+        Both paths set that gate. Only `apply` used to: a state that arrived while the link
+        was still coming up was written by the resync on connect, but the gate stayed shut,
+        and the heartbeat stood still until somebody walked into a zone.
+
+        A failed write is retried every WRITE_RETRY_S. Before, one refused write (wrong
+        routing, 'write during RUN' off, a PLC switched to STOP) froze the heartbeat and the
+        zone bits until the occupancy happened to change, even after the PLC accepted again.
+        """
         self._healthy = False
-        written = self._manager.apply_state(state)
-        self._healthy = bool(state.running and not state.fault)
+        self._retry_write_at = time.monotonic() + WRITE_RETRY_S
+        written = self._manager.apply_state(state) if state is not None else self._manager.resync()
+        self._retry_write_at = 0.0
+        last = self._manager._last_state
+        self._healthy = bool(last is not None and last.running and not last.fault)
         for dev, val in written:
             self.device_written.emit(dev, val)
         if written:
+            self._clear_protocol_fault()
             self._emit_memory(force=True)
 
     def _heartbeat_frozen(self) -> bool:
@@ -186,6 +211,8 @@ class PlcWorker(QThread):
     def _periodic(self) -> None:
         now = time.monotonic()
         if self._manager.is_connected():
+            if self._retry_write_at and now >= self._retry_write_at:
+                self._handle(("resync", None))
             try:
                 hb = None if self._heartbeat_frozen() else self._manager.heartbeat_tick(now)
                 if hb is not None:
@@ -210,8 +237,7 @@ class PlcWorker(QThread):
                     self._reconnect_attempt = 0
                     self.connection_changed.emit(True, "Reconnected")
                     try:
-                        for dev, val in self._manager.resync():
-                            self.device_written.emit(dev, val)
+                        self._write_state(None)
                     except PlcError as exc:
                         self._on_comm_error(exc)
                     self._emit_memory(force=True)
@@ -220,8 +246,8 @@ class PlcWorker(QThread):
 
     def _on_comm_error(self, exc: Exception) -> None:
         message = str(exc)
-        if isinstance(exc, McProtocolError):
-            self._on_protocol_fault(message)
+        if isinstance(exc, (McProtocolError, PlcConfigError)):
+            self._on_protocol_fault(message)   # the link is fine: report, keep it, retry
             return
         log.error("PLC communication error: %s", message)
         try:

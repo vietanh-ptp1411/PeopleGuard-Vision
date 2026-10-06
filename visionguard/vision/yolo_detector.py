@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import gc
 import threading
 from pathlib import Path
 from typing import List, Optional
@@ -86,6 +87,7 @@ class YoloDetector(BaseDetector):
         self._info = DetectorInfo()
         self._lock = threading.Lock()
         self._tracking = False
+        self._default_cpu_threads = None
 
     # ------------------------------------------------------------------ lifecycle
     def load(self, config: DetectorConfig) -> DetectorInfo:
@@ -98,6 +100,11 @@ class YoloDetector(BaseDetector):
 
             path = resolve_model_path(config.model_path, config.auto_download)
             device = resolve_device(config.device)
+            import torch
+            if self._default_cpu_threads is None:
+                self._default_cpu_threads = torch.get_num_threads()
+            torch.set_num_threads(max(1, min(64, int(config.cpu_threads)))
+                                  if config.cpu_threads > 0 else self._default_cpu_threads)
             try:
                 model = YOLO(str(path))
                 # Move once; predict() also receives device but this catches driver issues early.
@@ -134,6 +141,10 @@ class YoloDetector(BaseDetector):
             try:
                 dummy = np.zeros((max(64, config.imgsz), max(64, config.imgsz), 3), dtype=np.uint8)
                 self._run(dummy)
+                # Ultralytics select_device resets Torch's CPU threads during the
+                # first predictor setup. Restore the requested steady-state cap.
+                if config.cpu_threads > 0:
+                    torch.set_num_threads(max(1, min(64, int(config.cpu_threads))))
             except Exception as exc:
                 self._model = None
                 raise DetectorError(f"Model warm-up failed on {device}: {exc}") from exc
@@ -142,8 +153,15 @@ class YoloDetector(BaseDetector):
             return self._info
 
     def unload(self) -> None:
+        had_model = self._model is not None
+        was_cuda = self._info.device.startswith("cuda")
         self._model = None
         self._info = DetectorInfo()
+        if had_model:
+            gc.collect()
+            if was_cuda:
+                import torch
+                torch.cuda.empty_cache()
 
     def is_loaded(self) -> bool:
         return self._model is not None

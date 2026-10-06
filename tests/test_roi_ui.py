@@ -34,7 +34,9 @@ class RoiUiTests(unittest.TestCase):
         self.manager = RoiManager()
         self.first = self.manager.create(RoiType.INCLUDE, POINTS, plc_device="M200")
         self.second = self.manager.create(RoiType.INCLUDE, POINTS, plc_device="M201")
-        self.plc = PlcConfigWidget(PlcConfig())
+        cfg = PlcConfig()
+        cfg.mapping.device_heartbeat = "M110"
+        self.plc = PlcConfigWidget(cfg)
         self.panel = self.plc.roi_mapping
         self.zones = RoiPanel()
         self.panel.set_cameras(["Camera 1"])
@@ -55,7 +57,7 @@ class RoiUiTests(unittest.TestCase):
         self.assertFalse(self.zones.findChildren(QTableWidget))
         self.assertTrue(self.plc.devices_page.isAncestorOf(self.panel.table))
         self.assertTrue(self.plc.devices_page.isAncestorOf(self.panel.edt_plc))
-        self.assertFalse(self.plc.devices_page.isAncestorOf(self.plc.edt_person))
+        self.assertFalse(self.plc.devices_page.isAncestorOf(self.plc.edt_hb))
 
     def test_devices_has_its_own_roi_save_action(self):
         self.plc.show_devices()
@@ -200,6 +202,37 @@ class RoiUiTests(unittest.TestCase):
                     window.close()
                     window.deleteLater()
                     self.app.processEvents()
+
+    def test_closing_window_saves_unapplied_and_unsaved_edits(self):
+        with tempfile.TemporaryDirectory() as folder:
+            cm = ConfigManager(Path(folder) / "config")
+            cfg = cm.settings
+            cfg.camera.detection_mode = DetectionMode.PC_YOLO.value
+            cfg.camera.camera_type = "video"
+            cfg.app.autostart = False
+            cfg.ai.detector.auto_load_on_start = False
+            cfg.app.events_db_path = str(Path(folder) / "events.db")
+            cfg.app.snapshot.enabled = cfg.app.clip.enabled = False
+            cfg.plc.simulation_mode = True
+            cm.save_all()
+            with patch("visionguard.app.controllers.system_controller.housekeeping.run_in_background"):
+                window = MainWindow(cm)
+                try:
+                    window.ctrl.add_roi("include", POINTS, camera=0)
+                    roi = window.ctrl.roi_manager.all()[0]
+                    devices = window.plc_cfg.roi_mapping
+                    devices.select(roi.id)
+                    devices.edt_plc.setText("m12010")          # typed, Apply never pressed
+                    window.ctrl.update_region("7", "Cửa robot", "M12011", True)
+                    self.assertTrue(window.ctrl.region_mapping.dirty)
+                finally:
+                    window.close()
+                    window.deleteLater()
+                    self.app.processEvents()
+            saved = json.loads(cm.roi_file.read_text(encoding="utf-8"))["rois"]
+            self.assertEqual([(r["id"], r["plc_device"]) for r in saved], [(roi.id, "M12010")])
+            regions = json.loads(cm.region_mapping_file.read_text(encoding="utf-8"))["regions"]
+            self.assertEqual([(r["camera_region_id"], r["plc_device"]) for r in regions], [("7", "M12011")])
 
 
 if __name__ == "__main__":

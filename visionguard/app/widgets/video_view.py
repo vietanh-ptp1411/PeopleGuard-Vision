@@ -55,6 +55,7 @@ class VideoView(QWidget):
         super().__init__(parent)
         self.vis = vis
         self._image: Optional[QImage] = None
+        self._pending_image = None
         self._img_w = 0
         self._img_h = 0
         self._result: Optional[PipelineResult] = None
@@ -109,7 +110,23 @@ class VideoView(QWidget):
         20 fps and its frames are already arriving here; the boxes from the newest result
         are painted over the live picture instead, at most one inference behind it.
         """
+        self._img_h, self._img_w = frame.image.shape[:2]
+        if not self.isVisible() or self.window().isMinimized():
+            self._pending_image = frame.image
+            return
+        self._pending_image = None
         self._set_image(frame.image)
+
+    def showEvent(self, event) -> None:  # noqa: N802
+        super().showEvent(event)
+        if self._pending_image is not None:
+            image, self._pending_image = self._pending_image, None
+            self._set_image(image)
+        self._timer.start()
+
+    def hideEvent(self, event) -> None:  # noqa: N802
+        self._timer.stop()
+        super().hideEvent(event)
 
     def set_result(self, result: PipelineResult) -> None:
         if self._display_mode != "result":
@@ -125,6 +142,7 @@ class VideoView(QWidget):
 
     def clear_image(self) -> None:
         self._image = None
+        self._pending_image = None
         self._result = None
         self._mark()
 
@@ -165,7 +183,7 @@ class VideoView(QWidget):
 
     @property
     def has_image(self) -> bool:
-        return self._image is not None
+        return self._image is not None or self._pending_image is not None
 
     # ================================================================== editor API
     @property

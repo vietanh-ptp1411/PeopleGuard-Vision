@@ -72,6 +72,7 @@ def main() -> int:
                              "as app.autostart in config/app_config.json")
     parser.add_argument("--check", action="store_true",
                         help="run the pre-flight check and exit (0 ready, 1 fault, 2 warnings)")
+    parser.add_argument("--smoke-test", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args()
 
     if not process_env.inherited():
@@ -87,8 +88,13 @@ def main() -> int:
 
     cm = ConfigManager(args.config_dir)
     settings = cm.load_all()
+    if args.smoke_test and (not settings.plc.simulation_mode or settings.camera.is_ai_camera
+                           or settings.app.autostart or settings.ai.detector.auto_load_on_start
+                           or args.autostart):
+        parser.error("Smoke test requires isolated config: simulated PLC, PC AI, autostart/model preload off")
     level_name = (args.log_level or settings.app.log_level or "INFO").upper()
-    setup_logging("logs", getattr(logging, level_name, logging.INFO))
+    log_directory = Path(args.config_dir).resolve().parent / "logs" if args.smoke_test else "logs"
+    setup_logging(log_directory, getattr(logging, level_name, logging.INFO))
     _install_excepthook()
     log = logging.getLogger("SYSTEM")
     log.info("=" * 60)
@@ -130,12 +136,20 @@ def main() -> int:
     window.showMaximized()   # industrial HMI: always start on the full screen (F11 = borderless)
     app.processEvents()      # paint it now, before autostart queues its work behind the first frame
     log.info("Window shown %.1fs after launch", time.perf_counter() - _T0)
+    if args.smoke_test:
+        from PySide6.QtCore import QTimer
+        log.info("SMOKE TEST: isolated startup and graceful shutdown")
+        QTimer.singleShot(3000, window.close)
     if args.autostart or settings.app.autostart:
         # Unattended site: nobody is there to press START after a power cut. The
         # controller waits for the model rather than for a fixed number of seconds.
         window.ctrl.autostart()
     code = app.exec()
     log.info("VisionGuard exited (%d)", code)
+    if args.smoke_test:
+        import json
+        marker = Path(args.config_dir) / "smoke-result.json"
+        marker.write_text(json.dumps({"graceful_exit": True, "exit_code": code}), encoding="utf-8")
     return code
 
 

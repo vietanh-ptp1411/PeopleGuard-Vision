@@ -1,5 +1,15 @@
 # VisionGuard
 
+Cập nhật nhỏ cho khách: chạy **`Tao-Update.bat`** ở thư mục gốc. Gói update được build,
+kiểm thử và xác minh trước khi xuất vào `release/`; không gửi lại ZIP đầy đủ khi chỉ sửa
+mã chương trình. Xem [hướng dẫn tạo update](docs/TAO_UPDATE.md) và
+[kế hoạch tối ưu](docs/PROJECT_REVIEW_PLAN.md).
+Các thay đổi và phạm vi đã kiểm chứng được ghi tại [kết quả tối ưu](docs/OPTIMIZATION_RESULTS.md).
+
+Trang **Lưu trữ → Lịch sử** hỗ trợ xem theo trang và xuất CSV. Ghi SQLite, snapshot và clip
+chạy ngoài luồng giao diện; các bộ đệm ảnh có giới hạn. Tab AI Model có giới hạn FPS AI
+và số luồng CPU trong Advanced settings. Gói update giữ nguyên model và cấu hình của khách.
+
 Ứng dụng desktop công nghiệp phát hiện người trong vùng giám sát và báo trạng thái sang **PLC Mitsubishi
 (MC Protocol 3E)**. Hỗ trợ **hai chế độ phát hiện**, đổi qua lại ngay trong app:
 
